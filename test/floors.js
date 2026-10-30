@@ -1,8 +1,13 @@
 // Town floors. `node test/floors.js`; exit code 1 on any failure.
 //
 // Layout (baselayout.js + townmap.js), town tiers 0..4, lodgings and taverns on every floor, on seeds
-// that roll every platform style (1 lobed, 2 poly, 3 rect, 9 oval, 8 and 50 mixed):
-//   styles         those seeds do roll those styles
+// that roll every platform style (1 poly, 3 rect, 9 oval, 8 and 50 mixed) and on a base whose stack
+// is lobed (laid out before lobed left the roll):
+//   styles         those seeds do roll those styles; no new base rolls lobed
+//   growing        every open floor's back is GROW_PER_FLOOR tiles further out per floor above it, past
+//                  what its buildings need, and its sides stay
+//   the island     every structure, the gate and the pond are on it, every platform TERRACE_M inside
+//                  its rim; no walkable tile is off it
 //   reachable      every plot's doorstep is walkable from the square, through the stairs
 //   no overlap     no two structures' bounding circles overlap
 //   on its floor   BaseLayout.floorAt at each structure's centre is the floor it was placed on
@@ -32,14 +37,23 @@ const scenario = (name, fn) => {
 
 // ---------- layout ----------
 
+function lobedBase(seed) {
+  // a base laid out while 'lobed' was still rolled: its stack says so, and it keeps that look
+  const st = { town: 4, base: { seed, placed: {} }, buildings: {}, characters: [] };
+  TM.build(st);
+  for (const c of st.base.stack) if (c) { c.style = 'lobed'; delete c.rot; }
+  return { seed, placed: {}, stack: st.base.stack };
+}
+
 scenario('layout across tiers', () => {
-  const want = { 1: 'lobed', 2: 'poly', 3: 'rect', 9: 'oval', 8: 'mixed', 50: 'mixed' };
-  for (const seed of [1, 2, 3, 9, 8, 50]) {
-    const st = { town: 0, base: { seed, placed: {} }, buildings: { farm: 1, mine: 0, garden: 2, kitchen: 0, smithy: 1, lab: 0, training: 0, altar: 0 }, characters: [] };
+  const want = { 1: 'poly', 3: 'rect', 9: 'oval', 8: 'mixed', 50: 'mixed', lobed: 'lobed' };
+  for (const seed of [1, 3, 9, 8, 50, 'lobed']) {
+    const base = seed === 'lobed' ? lobedBase(4) : { seed, placed: {} };
+    const st = { town: 0, base, buildings: { farm: 1, mine: 0, garden: 2, kitchen: 0, smithy: 1, lab: 0, training: 0, altar: 0 }, characters: [] };
     const add = (t) => Lodging.build(st, t, { free: true, instant: true, floor: Econ.LODGINGS[t].floor });
     add('bunkhouse'); add('tent'); add('tent');
     const adds = [[], ['longhouse', 'alehouse', 'barracks'], ['cottages', 'inn'], ['manor', 'salon', 'bunkhouse'], ['sanctum', 'crownhall', 'tent']];
-    let prev = null;
+    let prev = null, backs = [];
     for (let town = 0; town <= 4; town++) {
       st.town = town;
       adds[town].forEach(add);
@@ -75,8 +89,53 @@ scenario('layout across tiers', () => {
         const mid = { x: (stair.a.x + stair.b.x) / 2, z: (stair.a.z + stair.b.z) / 2 };
         check(Math.abs(BL.heightAt(lay, mid.x, mid.z) - BL.FLOOR_H * (stair.k - 0.5)) < 1e-6, `${tag}: stair ${stair.k} is halfway up at its middle`);
       }
+      // growing: each open floor's back moves out GROW_PER_FLOOR per floor above it, past what its
+      // buildings need, and its sides stay: measured from its own centre (ovals and polygons sit back)
+      for (let k = 1; k <= town; k++) {
+        const c = st.base.stack[k], pads = S.filter(t => t.floor === k && !t.annex).map(t => ({ x: t.x, z: t.z, r: t.r + BL.PAD }));
+        if ((c.style || 'lobed') === 'lobed') continue;
+        const sn = Math.sin(c.rot || 0), cs = Math.cos(c.rot || 0);
+        const edge = (extra, ux, uz) => { const G = BL.grow(c, pads, extra); return BL.edgeFrom(G, G.x, G.z, ux, uz); };
+        const want = BL.extraAt(k, town);
+        const back = edge(want, -sn, -cs) - edge(0, -sn, -cs), side = edge(want, cs, -sn) - edge(0, cs, -sn);
+        check(Math.abs(back - want) < 0.05 && Math.abs(side) < 0.05, `${tag}: floor ${k}'s back is ${want} tiles further out and its sides stay (${back.toFixed(2)}, ${side.toFixed(2)})`);
+      }
+      if (town >= 1) {
+        const c = st.base.stack[1];
+        backs.push(BL.edgeFrom(lay.floors[1].shape, c.x, c.z, -Math.sin(c.rot || 0), -Math.cos(c.rot || 0)));
+      }
+      // the island
+      for (const s2 of S) check(BL.islandSdf(lay, s2.x, s2.z) >= s2.r, `${tag}: ${s2.key} is on the island`);
+      check(BL.islandSdf(lay, lay.gate.x, lay.gate.z) > 0.8 && BL.islandSdf(lay, lay.gate.x, lay.gate.z) < 4, `${tag}: the gate stands just inside the rim`);
+      if (lay.pond) check(BL.islandSdf(lay, lay.pond.x, lay.pond.z) > lay.pond.r, `${tag}: the pond is on the island`);
+      for (let k = 1; k <= town; k++) {
+        const F = lay.floors[k].shape;
+        let worst = Infinity;
+        for (let i = 0; i < 72; i++) {
+          const t = i / 72 * 2 * Math.PI, e = BL.edgeAlong(F, Math.cos(t), Math.sin(t));
+          worst = Math.min(worst, BL.islandSdf(lay, F.x + Math.cos(t) * e, F.z + Math.sin(t) * e));
+        }
+        check(worst >= BL.TERRACE_M - 0.3, `${tag}: floor ${k}'s platform is ${BL.TERRACE_M} inside the rim (${worst.toFixed(2)})`);
+      }
+      let off = 0;
+      for (let ty = 0; ty < m.h; ty++) for (let tx = 0; tx < m.w; tx++) {
+        if (!m.passable(tx, ty)) continue;
+        if (BL.islandSdf(lay, tx - m.ox + 0.5, ty - m.oz + 0.5) < 0) off++;
+      }
+      check(off === 0, `${tag}: no walkable tile past the rim (${off})`);
     }
+    // the fit round its buildings can reshape as more are added (wider and shallower), so this is
+    // less than the GROW_PER_FLOOR x 3 the sweep adds
+    if (seed !== 'lobed') check(backs[backs.length - 1] >= backs[0] + BL.GROW_PER_FLOOR * 2, `seed ${seed}: the lowest terrace reaches at least ${BL.GROW_PER_FLOOR * 2} tiles further back at City than at Outpost (${backs.map(v => v.toFixed(0)).join(' ')})`);
   }
+  // no new base rolls lobed
+  const rolled = new Set();
+  for (let seed = 100; seed < 160; seed++) {
+    const st = { town: 4, base: { seed, placed: {} }, buildings: {}, characters: [] };
+    TM.build(st);
+    for (const c of st.base.stack) if (c) rolled.add(c.style);
+  }
+  check(!rolled.has('lobed') && rolled.has('oval') && rolled.has('rect') && rolled.has('poly'), `60 new bases roll ${[...rolled].join(', ')}`);
 });
 
 // ---------- standing ----------

@@ -27,13 +27,24 @@
 // FLOORS. Floor k >= 1 is a platform FLOOR_H x k tiles up, centred on a stack point north of the
 // crystal, climbing in a zigzag (ZIG). The stack (all MAX_FLOOR floors) and every floor's SHAPE are fixed the first time the
 // layout runs, before those floors open, and nothing is placed where it would end up under one.
-// A base rolls one shape style for all its floors (STYLES), or 'mixed' for one per floor:
 // Every convex shape FACES its stair: its local +v axis points at what the stair heads for, and
 // its front (the side on that axis) is CORE_R from its centre and never moves, so the landing
-// keeps its room. The back of a floor is under the floor above, so the room a floor has is to
-// its sides; each shape grows there first.
+// keeps its room. Its BACK (-v) points away from the floor below, out of the town.
+// GROWING. For every floor opened above it, an open floor's back moves out GROW_PER_FLOOR tiles
+// past whatever its buildings need: the shape is swept backward from its widest row (bodySdf), so
+// the terraces grow out of the town and the island grows with them (THE ISLAND) instead of the
+// platforms covering more of the ground floor. Buildings below a floor keep clear of the size it will reach once
+// every floor is open, and off the land behind it, so growing never covers anything and the
+// buildings on a floor can always take its body further back.
+// A base rolls one shape style for all its floors (STYLES), or 'mixed' for one per floor. Bases
+// laid out before 'lobed' left the roll keep it:
 //   oval   an ellipse, CORE_R / aspect wide and CORE_R deep; grows wider, and deeper away from its
-//          front, taking the width and depth that hold its buildings in the least area
+//          front, taking the width and depth that hold its buildings in the least area. It may sit
+//          forward of its front (OVAL_CUTS) and be cut flat there, a D with its straight side to
+//          the stair, so a building beside the stair does not need the whole oval to swell.
+// Ovals and polygons may also sit off to one side of the stair line (SHIFTS), as long as their flat
+// front still spans the stair's top: a floor whose other side is under the floor above grows
+// toward the side it can use.
 //   rect   a rounded rectangle, CORE_R / aspect wide and CORE_R deep; its sides and back are each
 //          pushed out on their own to hold its buildings
 //   poly   a regular hexagon or octagon, apothem CORE_R, one flat side as its front; stretched
@@ -42,14 +53,23 @@
 //          back to the plaza, so the platform is the shape of what stands on it
 // Every shape contains the disc of CORE_R. A building joins the convex body of oval/rect/poly
 // floors, which grows to hold it, but only where the grown body would not cover anything below it
-// (buildings, plazas, stairs, the square, the crystal) and stays under SHAPE_MAX; a building on a
-// lower floor keeps RESERVE tiles from a higher floor's edge (RESERVE_EMPTY while that floor has
-// nothing on it) so it has room to, and the ground keeps
-// ZONE tiles from every floor's unexpanded shape (the terrace zone). When that body
+// (buildings, plazas, stairs, the square, the crystal) and its buildings need no more than
+// SHAPE_MAX; a building on a lower floor keeps RESERVE tiles from a higher floor's edge
+// (RESERVE_EMPTY while that floor has nothing on it) so it has room to, and the ground keeps ZONE
+// tiles from every floor's final shape and the land behind it. When that body
 // is boxed in, the building stands on an ANNEX instead: its own pad and a way back to the plaza,
 // as on a lobed floor. Consecutive floors overlap by OVERLAP tiles along the line between them.
 // Each floor's STAIR runs from its platform's edge, along the line toward the floor below (the
 // crystal for floor 1), STAIR_LEN down; that whole line is a CORRIDOR kept clear of buildings.
+//
+// THE ISLAND. The base is a floating island as big as what is built on it. On each of ISLE_N
+// bearings from its centre the rim lies ISLAND_M tiles past the farthest thing on the ground (the
+// square, the crystal, ground structures) and TERRACE_M past the farthest platform edge, so the
+// island grows where the terraces grow. A dip between two parts of the town is filled across
+// (ISLE_FILL), the rim is smoothed (ISLE_SMOOTH) and pushed out by up to ISLAND_WOBBLE tiles of
+// three seeded sine waves. islandSdf() is positive on it (measured along the bearing). The road out
+// leaves the square south and ends at the GATE, a portal just inside the rim. A POND sits on open
+// ground near the rim where nothing is within reach, and spills over the rim as a waterfall (lay.fall).
 //
 // Where things go (bearing measured from north, clockwise), floor 0 only:
 //   work     penalised by cos(bearing) * WORK_NORTH: east, south and west of the square
@@ -74,7 +94,7 @@ const MIN_EXTENT = 16;         // base radius before anything is built
 
 const MAX_FLOOR = 4;
 const FLOOR_H = 2.4;                           // tiles of height per floor
-const CORE_R = [0, 9, 8, 7, 6];                // smallest half-extent of each floor's shape
+const CORE_R = [0, 9, 8, 7.5, 7.5];            // smallest half-extent of each floor's shape
 const OVERLAP = 2.5;                           // how far a floor reaches back over the one below
 const STAIR_LEN = 3.6, STAIR_W = 2.2;
 const PAD = 1.1;                               // platform margin round a building on an upper floor
@@ -83,12 +103,20 @@ const CLIFF = 0.35;                            // half-width of the cliff band i
 const WAY_MARGIN = 0.9;                        // a way's platform half-width past its road's
 const WAY_CLEAR = 2.4;                         // kept clear either side of a way's centreline at placement
 const WAY_MAX = 14;                            // longest causeway, tiles past the body's edge
-const SHAPE_MAX = 28;                          // largest half-extent a convex body may grow to
+const SHAPE_MAX = 30;                          // largest half-extent the buildings on a convex body may need
+const GROW_PER_FLOOR = 4;                      // tiles a floor's back moves out per floor opened above it
 const RESERVE = 1.6;                           // a lower building keeps this far from a higher floor's edge (growth needs 1.4)
 const RESERVE_EMPTY = 8;                       // ... and this far while that floor has nothing on it, so its first buildings fit
-const ZONE = 8;                                // the ground keeps this far past every floor's unexpanded shape
+const ZONE = 5;                                // the ground keeps this far from every floor's final shape and the land behind it
 const RC = 1.4;                                // corner radius of a rect platform
-const STYLES = [['oval', 0.28], ['rect', 0.28], ['poly', 0.18], ['lobed', 0.14], ['mixed', 0.12]];
+const STYLES = [['oval', 0.32], ['rect', 0.32], ['poly', 0.2], ['mixed', 0.16]];
+const ISLAND_M = 6;                            // tiles of ground past the farthest ground structure to the island's rim
+const TERRACE_M = 2.2;                         // ... and past the farthest platform edge
+const ISLE_N = 180;                            // bearings the rim is worked out on
+const ISLE_FILL = 30;                          // bearings either side that a dip in the rim is filled across (60 degrees)
+const ISLE_SMOOTH = 4;                         // bearings either side the rim is widened over, then averaged over
+const ISLAND_WOBBLE = 2.6;                     // how far the rim is pushed out
+const POND_R = 2.0;                            // the pond that feeds the waterfall
 const ZIG = [0, 0, 1.15, 0.15, -1.0];          // bearing of floor k from floor k-1, radians from north (x side)
 
 function mulberry32(a) {
@@ -145,13 +173,20 @@ function rollShape(rnd, style, r) {
 }
 
 /** Normals of a regular polygon's sides in its local frame, one of them +v (the front). */
+const OVAL_CUTS = [1, 0.8, 0.62];             // where an oval's centre sits: front - depth x this (1 = no cut)
+const SHIFTS = [0, -4, 4, -8, 8, -12, 12];      // tiles an oval or polygon may sit to one side of its stair line
 const polyNormals = (n) => Array.from({ length: n }, (_, i) => { const t = Math.PI / 2 + i * 2 * Math.PI / n; return [Math.cos(t), Math.sin(t)]; });
 
+/** Tiles floor k's back has moved out once floors up to `top` are open. */
+const extraAt = (k, top) => GROW_PER_FLOOR * Math.max(0, top - k);
+
 /**
- * The shape of floor `c` (a stack entry) holding `pads` (circles: building + PAD) in its body.
- * Annex pads and ways are attached afterwards. Older stacks carry no style: they are lobed.
+ * The shape of floor `c` (a stack entry) holding `pads` (circles: building + PAD) in its body,
+ * then swept `extra` tiles further back (extraAt; a lobed floor grows all round instead). S.fit is
+ * the largest half-extent the pads need. Annex pads and ways are attached afterwards. Older stacks
+ * carry no style: they are lobed.
  */
-function grow(c, pads = []) {
+function grow(c, pads = [], extra = 0) {
   const style = c.style || 'lobed';
   const S = { style, x: c.x, z: c.z, r: c.r, rot: c.rot || 0, annexPads: [], ways: [] };
   S.cos = Math.cos(S.rot); S.sin = Math.sin(S.rot);
@@ -161,24 +196,27 @@ function grow(c, pads = []) {
     // v = front, so the centre sits at v = front - depth; the width that holds every pad at that
     // depth is worked out, and the depth with the least area wins.
     const front = style === 'oval' ? c.b0 : c.a0;
-    const P = pads.map(p => { const [u, v] = loc(p.x, p.z); return { u: Math.abs(u), v, r: p.r }; });
+    const P = pads.map(p => { const [u, v] = loc(p.x, p.z); return { u, v, r: p.r }; });
     const normals = style === 'poly' ? polyNormals(c.sides) : null;
     let best = null;
-    for (let depth = front; depth <= SHAPE_MAX + 1e-9; depth += style === 'poly' ? 1 : 0.5) {
-      const cv = front - depth;
+    for (let depth = front; depth <= SHAPE_MAX + 1e-9; depth += style === 'poly' ? 1 : 0.5) for (const cut of style === 'oval' ? OVAL_CUTS : [1]) for (const cu of pads.length ? SHIFTS : [0]) {
+      const cv = front - depth * cut;
       let width;
       if (style === 'oval') {
         width = c.a0;
         for (const p of P) {
           const q = (Math.abs(p.v - cv) + p.r) / depth;
-          if (q >= 1) { width = Infinity; break; }
-          width = Math.max(width, (p.u + p.r) / Math.sqrt(1 - q * q));
+          if (q >= 1 || p.v + p.r > front) { width = Infinity; break; }
+          width = Math.max(width, (Math.abs(p.u - cu) + p.r) / Math.sqrt(1 - q * q));
         }
+        // the flat front has to reach past the stair line on both sides of it
+        const chord = width * Math.sqrt(Math.max(0, 1 - ((front - cv) / depth) ** 2));
+        if (cu && Math.abs(cu) > chord - STAIR_W) continue;
       } else {
         // stretched polygon: holds(sx) is monotone in the lateral stretch, so bisect it
         const sz = depth / front;
         const holds = (sx) => P.every(p => {
-          const pu = p.u / sx, pv = (p.v - cv) / sz, rr = p.r / Math.min(sx, sz);
+          const pu = (p.u - cu) / sx, pv = (p.v - cv) / sz, rr = p.r / Math.min(sx, sz);
           let m = -Infinity;
           for (const [nu, nv] of normals) m = Math.max(m, pu * nu + pv * nv);
           return c.a0 - m >= rr;
@@ -192,13 +230,19 @@ function grow(c, pads = []) {
         }
       }
       if (width > SHAPE_MAX) continue;
-      const cost = width * depth;
-      if (!best || cost < best.cost - 1e-9) best = { cost, width, depth, cv };
+      // a polygon's front side reaches A tan(pi/n) x stretch each way from its middle
+      if (style === 'poly' && cu && Math.abs(cu) > c.a0 * Math.tan(Math.PI / c.sides) * (width / c.a0) - STAIR_W) continue;
+      const cost = width * depth * (1 + cut) / 2;      // a cut oval is that much smaller
+      if (!best || cost < best.cost - 1e-9) best = { cost, width, depth, cv, cu };
       if (!pads.length) break;                         // nothing to hold: the shape at rest
     }
     if (!best) best = { width: SHAPE_MAX * 2, depth: SHAPE_MAX * 2, cv: front - SHAPE_MAX * 2 };   // too big: valid() refuses it
-    S.x = c.x + S.sin * best.cv; S.z = c.z + S.cos * best.cv;      // local +v is (sin rot, cos rot) in the world
-    if (style === 'oval') { S.a = best.width; S.b = best.depth; }
+    const cu = best.cu || 0;
+    // local +v is (sin rot, cos rot) in the world and local +u is (cos rot, -sin rot)
+    S.x = c.x + S.sin * best.cv + S.cos * cu; S.z = c.z + S.cos * best.cv - S.sin * cu;
+    S.fit = Math.max(best.width, best.depth);
+    S.back = extra;                                // the floors above sweep it back from its widest row (bodySdf)
+    if (style === 'oval') { S.a = best.width; S.b = best.depth; S.clip = front - best.cv; }   // the flat front, from the centre
     else { S.sides = c.sides; S.normals = normals; S.A = c.a0; S.sx = best.width / c.a0; S.sz = best.depth / front; }
   } else if (style === 'rect') {
     S.x0 = -c.hx0; S.x1 = c.hx0; S.z0 = -c.hz0; S.z1 = c.hz0;
@@ -206,28 +250,30 @@ function grow(c, pads = []) {
       const [u, v] = loc(p.x, p.z);
       S.x0 = Math.min(S.x0, u - p.r); S.x1 = Math.max(S.x1, u + p.r); S.z0 = Math.min(S.z0, v - p.r); S.z1 = Math.max(S.z1, v + p.r);
     }
+    S.fit = Math.max(-S.x0, S.x1, -S.z0, S.z1);
+    S.z0 -= extra;                                 // then the floors above push its back out; the front (+v) and sides stay
   } else {
+    S.r = c.r + extra;
+    S.fit = S.r;
     S.pads = pads.slice();
   }
   return S;
 }
 
-/** Largest half-extent of a convex body. */
-function bodySize(S) {
-  if (S.style === 'oval') return Math.max(S.a, S.b);
-  if (S.style === 'rect') return Math.max(-S.x0, S.x1, -S.z0, S.z1);
-  if (S.style === 'poly') return S.A * Math.max(S.sx, S.sz);
-  return S.r;
-}
-
-/** Signed distance into the body of a shape: positive inside, in tiles. */
-function bodySdf(S, x, z) {
+/**
+ * Signed distance into the body of a shape: positive inside, in tiles. A convex body is swept
+ * `back` tiles backward from its widest row (v = 0 in its frame): a point up to that far behind the
+ * row is measured as if it were on it. back = Infinity gives the body and all the land behind it.
+ */
+function bodySdf(S, x, z, back = S.back || 0) {
   const dx = x - S.x, dz = z - S.z;
-  const u = dx * S.cos - dz * S.sin, v = dx * S.sin + dz * S.cos;
+  const u = dx * S.cos - dz * S.sin;
+  let v = dx * S.sin + dz * S.cos;
+  if (v < 0 && back && S.style !== 'lobed') v = Math.min(0, v + back);
   if (S.style === 'oval') {
     const q = Math.hypot(u / S.a, v / S.b);
-    if (q < 1e-6) return Math.min(S.a, S.b);
-    return (1 - q) * q / Math.hypot(u / (S.a * S.a), v / (S.b * S.b));       // first-order distance to the ellipse
+    const d = q < 1e-6 ? Math.min(S.a, S.b) : (1 - q) * q / Math.hypot(u / (S.a * S.a), v / (S.b * S.b));   // first-order distance to the ellipse
+    return S.clip == null ? d : Math.min(d, S.clip - v);                         // cut flat at the front
   }
   if (S.style === 'rect') {
     const cx = (S.x0 + S.x1) / 2, cz = (S.z0 + S.z1) / 2, hx = (S.x1 - S.x0) / 2, hz = (S.z1 - S.z0) / 2;
@@ -300,7 +346,7 @@ function stackFloors(base, obstacles) {
         const rot = Math.atan2(-ux, -uz);
         const d0 = (k === 1 ? CRYSTAL_R + STAIR_LEN - 0.4 : edgeAlong(prevShape, ux, uz) - OVERLAP) + r;
         const x = from.x + ux * (d0 + dd), z = from.z + uz * (d0 + dd);
-        const S = grow({ x, z, r, rot, ...params });
+        const S = grow({ x, z, r, rot, ...params }, [], extraAt(k, MAX_FLOOR));
         let hits = 0;
         for (const o of obstacles) if (bodySdf(S, o.x, o.z) > -(o.r + 1.0)) hits++;
         if (bodySdf(S, 0, 0) > -(SQUARE_R + 2)) hits += 50;
@@ -328,19 +374,22 @@ function stackFloors(base, obstacles) {
  * stand-ins for annex ways until the roads exist.
  */
 function placeContext(stack, top) {
-  const ctx = { stack, top, body: [], annex: [], lines: [], shapes: [], corridors: [] };
+  const ctx = { stack, top, body: [], annex: [], lines: [], shapes: [], reserve: [], corridors: [] };
   for (let k = 1; k <= MAX_FLOOR; k++) {
     ctx.body[k] = []; ctx.annex[k] = []; ctx.lines[k] = [];
     ctx.corridors.push({ k, a: stack[k], b: targetOf(stack, k) });
   }
+  // shapes[k]: floor k as it stands now; reserve[k]: as it will stand with every floor open,
+  // which is what everything below it keeps clear of
   ctx.rebuild = (k) => {
-    const S = grow(stack[k], ctx.body[k]);
-    S.annexPads = ctx.annex[k].slice();
-    S.ways = ctx.lines[k].slice();
-    ctx.shapes[k] = S;
+    for (const [list, extra] of [[ctx.shapes, extraAt(k, top)], [ctx.reserve, extraAt(k, MAX_FLOOR)]]) {
+      const S = grow(stack[k], ctx.body[k], extra);
+      S.annexPads = ctx.annex[k].slice();
+      S.ways = ctx.lines[k].slice();
+      list[k] = S;
+    }
   };
   for (let k = 1; k <= MAX_FLOOR; k++) ctx.rebuild(k);
-  ctx.base = stack.map(c => c && grow(c));                // each floor's unexpanded shape
   ctx.add = (o) => {
     if (!o.floor) return;
     const pad = { x: o.x, z: o.z, r: o.r + PAD };
@@ -409,12 +458,14 @@ function wayClear(x, z, r, f, standing, ctx) {
  * convex floor's grown body, or anywhere on the ground), or 'annex' (its own pad and way).
  * `level` relaxes the rules for the fallback passes in place():
  *   0 strict: the body on convex floors, the way rules on lobed ones
- *   1 an annex with the way rules (convex floors)
- *   2 an annex without them
- *   3 only overlap with standing structures and the square
+ *   1 the body again, with empty floors above reserving only RESERVE and RELAX more size allowed
+ *   2 an annex with the way rules (convex floors)
+ *   3 an annex without them
+ *   4 only overlap with standing structures and the square
  */
+const RELAX = 8;
 function valid(x, z, r, f, standing, ctx, level = 0) {
-  if (level >= 3) {
+  if (level >= 4) {
     if (Math.hypot(x, z) < SQUARE_R + r + GAP) return null;
     for (const o of standing) if (Math.hypot(x - o.x, z - o.z) < r + o.r + GAP) return null;
     return f && (ctx.stack[f].style || 'lobed') !== 'lobed' ? 'annex' : 'body';
@@ -430,25 +481,26 @@ function valid(x, z, r, f, standing, ctx, level = 0) {
     if (j === f) { if (Math.hypot(x - stack[j].x, z - stack[j].z) < PLAZA_R + r + 0.8) return null; continue; }
     if (j > f) {                                       // under floor j, or in the way of its growing
       const empty = !ctx.body[j].length && !ctx.annex[j].length;
-      if (shapeSdf(ctx.shapes[j], x, z) > -(r + (empty ? RESERVE_EMPTY : RESERVE))) return null;
+      // an empty floor's own growth (extraAt) already counts toward the room its first buildings need
+      const margin = empty && level === 0 ? Math.max(RESERVE, RESERVE_EMPTY - extraAt(j, MAX_FLOOR)) : RESERVE;
+      if (shapeSdf(ctx.reserve[j], x, z) > -(r + margin)) return null;
+      // nor behind it, where its buildings take it; the ground keeps ZONE from all of that
+      if (bodySdf(ctx.reserve[j], x, z, Infinity) > -(r + (f ? margin : ZONE))) return null;
     }
     else if (Math.hypot(x - stack[j].x, z - stack[j].z) < PLAZA_R + r + PAD + 0.5) return null;   // would bury floor j's plaza
   }
   for (const cor of ctx.corridors) if (segDist(x, z, cor.a, cor.b) < r + STAIR_W / 2 + (f ? PAD : 0.8)) return null;
-  if (f === 0) {
-    // the terrace zone: land the floors will grow into is not built on from the ground
-    for (let j = 1; j <= MAX_FLOOR; j++) if (bodySdf(ctx.base[j], x, z) > -(r + ZONE)) return null;
-    return 'body';
-  }
+  if (f === 0) return 'body';
   const convex = (stack[f].style || 'lobed') !== 'lobed';
-  if (convex && level === 0) {
-    const G = grow(stack[f], [...ctx.body[f], { x, z, r: r + PAD }]);
-    if (bodySize(G) > SHAPE_MAX) return null;
-    ctx.grown = bodySize(G);                       // place() scores a body spot by what it costs the shape
-    return clearBelow(G, f, standing, ctx) ? 'body' : null;
+  if (convex && level <= 1) {
+    const pads = [...ctx.body[f], { x, z, r: r + PAD }];
+    const G = grow(stack[f], pads, extraAt(f, ctx.top)), F = grow(stack[f], pads, extraAt(f, MAX_FLOOR));
+    if (F.fit > SHAPE_MAX + (level ? RELAX : 0)) return null;   // the cap is on what the buildings need
+    ctx.grown = G.fit;                             // place() scores a body spot by what it costs the shape
+    return clearBelow(G, f, standing, ctx) && clearBelow(F, f, standing, ctx) ? 'body' : null;
   }
-  if (!convex && level === 1) return null;              // lobed floors go straight from strict to relaxed
-  if (level <= 1 && !wayClear(x, z, r, f, standing, ctx)) return null;
+  if (!convex && (level === 1 || level === 2)) return null;   // lobed floors go straight from strict to relaxed
+  if (level <= 2 && !wayClear(x, z, r, f, standing, ctx)) return null;
   return convex ? 'annex' : 'body';
 }
 
@@ -476,9 +528,9 @@ function place(seed, s, standing, ctx) {
   let best = null;
   // strict first; if a crowded floor has no legal spot, an annex, then relaxed rules, then
   // everything but overlap, so a building is never left without a place
-  for (let level = 0; level <= 3 && !best; level++) {
+  for (let level = 0; level <= 4 && !best; level++) {
     let firstRing = null;
-    const rings = convex && level === 0 ? SEARCH * 4 : SEARCH;
+    const rings = convex && level <= 1 ? SEARCH * 4 : SEARCH;
     for (let d = start; d < start + 200; d += RING_STEP) {
       if (firstRing !== null && d > firstRing + rings * RING_STEP) break;
       for (let k = 0; k < ANGLES; k++) {
@@ -536,13 +588,13 @@ function layout(state, list, { top = 0 } = {}) {
   }
   if (!base.stack) base.stack = stackFloors(base, standing);
   const stack = base.stack;
-  // A save laid out before floors existed can have a ground building where an open floor now
-  // stands (stackFloors avoids them where it can). That building is placed again on the ground.
+  // A save laid out under older rules (before floors existed, or before they grew backward) can have
+  // a building where a higher open floor now stands (stackFloors avoids them where it can). That
+  // building is placed again on its own floor.
   for (let i = standing.length - 1; i >= 0; i--) {
     const o = standing[i];
-    if (o.floor !== 0) continue;
-    for (let k = 1; k <= top; k++) {
-      if (bodySdf(grow(stack[k]), o.x, o.z) > -(o.r + 0.8)) { delete base.placed[o.key]; standing.splice(i, 1); break; }
+    for (let k = o.floor + 1; k <= top; k++) {
+      if (bodySdf(grow(stack[k], [], extraAt(k, top)), o.x, o.z) > -(o.r + 0.8)) { delete base.placed[o.key]; standing.splice(i, 1); break; }
     }
   }
   const ctx = placeContext(stack, top);
@@ -584,7 +636,7 @@ function layout(state, list, { top = 0 } = {}) {
   for (let k = 1; k <= top; k++) {
     const on = structures.filter(s => s.floor === k);
     const lobed = (stack[k].style || 'lobed') === 'lobed';
-    const S = grow(stack[k], on.filter(s => lobed || !s.annex).map(s => ({ x: s.x, z: s.z, r: s.r + PAD })));
+    const S = grow(stack[k], on.filter(s => lobed || !s.annex).map(s => ({ x: s.x, z: s.z, r: s.r + PAD })), extraAt(k, top));
     S.annexPads = lobed ? [] : on.filter(s => s.annex).map(s => ({ x: s.x, z: s.z, r: s.r + PAD }));
     S.ways = roads.filter(r => r.floor === k && r.raised).flatMap(r => r.pts.slice(1).map((p, i) => ({
       a: { x: r.pts[i][0], z: r.pts[i][1] }, b: { x: p[0], z: p[1] }, half: r.width / 2 + WAY_MARGIN,
@@ -613,30 +665,73 @@ function layout(state, list, { top = 0 } = {}) {
     roads.push({ key: 'stair:' + st.k, floor: st.k, width: STAIR_W, pts: [[st.a.x, st.a.z], [c.x, c.z]] });
   }
 
-  // the road out: south from the square to the gate, just past the southernmost building on the
-  // ground, with two bends (the terraces grow north and do not push the gate away)
-  const south = Math.max(MIN_EXTENT, ...structures.filter(s => !s.floor).map(s => s.z + s.r + 3));
-  const gate = { x: (rnd() - 0.5) * 3, z: south + 1 };
+  // the island: what has to be on it, ISLAND_M round the ground's things and TERRACE_M round the
+  // platforms (structures on them are inside them already)
+  const crystal = crystalAt();
+  const need = [[0, 0, SQUARE_R + ISLAND_M], [crystal.x, crystal.z, CRYSTAL_R + ISLAND_M], [0, MIN_EXTENT * 0.6, ISLAND_M]];
+  for (const s of structures) need.push([s.x, s.z, s.r + (s.floor ? TERRACE_M : ISLAND_M)]);
+  for (let k = 1; k <= top; k++) {
+    const S = floors[k].shape;
+    for (let i = 0; i < 72; i++) { const t = i / 72 * Math.PI * 2, e = edgeAlong(S, Math.cos(t), Math.sin(t)); need.push([S.x + Math.cos(t) * e, S.z + Math.sin(t) * e, TERRACE_M]); }
+    for (const p of S.annexPads) need.push([p.x, p.z, p.r + TERRACE_M]);
+    for (const w of S.ways) for (let t = 0; t <= 1; t += 0.25) need.push([w.a.x + (w.b.x - w.a.x) * t, w.a.z + (w.b.z - w.a.z) * t, w.half + TERRACE_M]);
+  }
+  const irnd = mulberry32(hashStr('island', base.seed));
+  const island = islandRound(need, irnd);
+  const lay0 = { island };
+  // walk out from a point to the rim
+  const rimFrom = (ox, oz, ux, uz) => {
+    let lo = 0, hi = 4 * (island.hx + island.hz);
+    for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (islandSdf(lay0, ox + ux * m, oz + uz * m) >= 0) lo = m; else hi = m; }
+    return lo;
+  };
+
+  // the road out: south from the square to the gate, a portal just inside the rim
+  const ga = (rnd() - 0.5) * 0.3, gux = Math.sin(ga), guz = Math.cos(ga);
+  const reach = rimFrom(0, 0, gux, guz) - 2.2;
+  const gate = { x: gux * reach, z: guz * reach, ux: gux, uz: guz };
   roads.push({
     key: 'out', floor: 0, width: 2.4,
-    pts: [[0, SQUARE_R - 0.5], [(rnd() - 0.5) * 2, gate.z * 0.4], [(rnd() - 0.5) * 3, gate.z * 0.75], [gate.x, gate.z], [gate.x + (rnd() - 0.5) * 4, gate.z + 11]],
+    pts: [[0, SQUARE_R - 0.5], [gate.x * 0.4 + (rnd() - 0.5) * 2, gate.z * 0.4], [gate.x * 0.75 + (rnd() - 0.5) * 3, gate.z * 0.75], [gate.x, gate.z]],
   });
   // a short path from the square up to the crystal
-  const crystal = crystalAt();
   roads.push({ key: 'crystal', floor: 0, width: 2.0, pts: [[0, -SQUARE_R + 0.5], [crystal.x, crystal.z + CRYSTAL_R - 0.5]] });
 
-  // the built-up box: everything standing, every open floor, the square and the gate, plus 3 tiles
-  const bounds = { x0: -SQUARE_R, x1: SQUARE_R, z0: crystal.z - CRYSTAL_R, z1: gate.z + 1 };
-  const take = (x0, x1, z0, z1) => { bounds.x0 = Math.min(bounds.x0, x0); bounds.x1 = Math.max(bounds.x1, x1); bounds.z0 = Math.min(bounds.z0, z0); bounds.z1 = Math.max(bounds.z1, z1); };
-  for (const s of structures) take(s.x - s.r, s.x + s.r, s.z - s.r, s.z + s.r);
-  for (let k = 1; k <= top; k++) take(floors[k].box.x0, floors[k].box.x1, floors[k].box.z0, floors[k].box.z1);
-  bounds.x0 -= 3; bounds.x1 += 3; bounds.z0 -= 3; bounds.z1 += 3;
-  extent = Math.max(extent, gate.z + 2);
+  // the pond: open ground near the rim, as far as it can be from anything built, spilling over the
+  // rim as a waterfall
+  let pond = null, fall = null;
+  {
+    const segs = [];
+    for (const r of roads) for (let i = 0; i + 1 < r.pts.length; i++) segs.push([{ x: r.pts[i][0], z: r.pts[i][1] }, { x: r.pts[i + 1][0], z: r.pts[i + 1][1] }, r.width / 2]);
+    const lay1 = { island, floors, top, stairs };
+    let best = null;
+    const phase = irnd() * 6.283;
+    for (let i = 0; i < 72; i++) {
+      const t = phase + i / 72 * 6.283, ux = Math.cos(t), uz = Math.sin(t);
+      const e = rimFrom(island.cx, island.cz, ux, uz);
+      const rx = island.cx + ux * e, rz = island.cz + uz * e;
+      const px = rx - ux * (POND_R + 2.2), pz = rz - uz * (POND_R + 2.2);
+      let clear = Infinity;
+      for (const s of structures) clear = Math.min(clear, Math.hypot(px - s.x, pz - s.z) - s.r - POND_R);
+      for (const [a, b, half] of segs) clear = Math.min(clear, segDist(px, pz, a, b) - half - POND_R);
+      for (let k = 1; k <= top; k++) clear = Math.min(clear, -floorSdf(lay1, k, px, pz) - POND_R);
+      clear = Math.min(clear, Math.hypot(px - gate.x, pz - gate.z) - 6, Math.hypot(px, pz) - SQUARE_R - 4, Math.hypot(px - crystal.x, pz - crystal.z) - CRYSTAL_R - 4);
+      if (clear >= 2 && (!best || clear > best.clear)) best = { clear, px, pz, rx, rz, ux, uz };
+    }
+    if (best) {
+      pond = { x: best.px, z: best.pz, r: POND_R };
+      fall = { x: best.rx, z: best.rz, ux: best.ux, uz: best.uz };
+    }
+  }
+
+  // the box the town is drawn and walked in: the island's
+  const bounds = { ...island.box };
+  extent =Math.max(extent, Math.hypot(bounds.x0, bounds.z0), Math.hypot(bounds.x1, bounds.z0), Math.hypot(bounds.x0, bounds.z1), Math.hypot(bounds.x1, bounds.z1));
 
   return {
     seed: base.seed, top, style: stack[1] ? (new Set(stack.slice(1).map(c => c.style || 'lobed')).size > 1 ? 'mixed' : (stack[1].style || 'lobed')) : 'lobed',
     square: { x: 0, z: 0, r: SQUARE_R }, crystal: { ...crystal, r: CRYSTAL_R },
-    gate, extent, bounds, structures, roads, floors, stairs,
+    gate, extent, bounds, island, pond, fall, structures, roads, floors, stairs,
     plazas: floors.filter(Boolean).map(F => ({ k: F.k, x: F.core.x, z: F.core.z, r: PLAZA_R })),
   };
 }
@@ -661,6 +756,64 @@ function onStair(lay, x, z, slack = 0) {
   return null;
 }
 
+/**
+ * The island round `need` (discs [x, z, r] that have to be on it): its centre (the middle of their
+ * box), its rim's distance from there on each of ISLE_N bearings (bearing i at 2 pi i / ISLE_N, from
+ * +x toward +z), and the box the rim fits in. Uses three numbers from `rnd` for the wobble.
+ */
+function islandRound(need, rnd) {
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z, r] of need) { x0 = Math.min(x0, x - r); x1 = Math.max(x1, x + r); z0 = Math.min(z0, z - r); z1 = Math.max(z1, z + r); }
+  const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, step = 2 * Math.PI / ISLE_N;
+  const at = (a, i) => a[((i % ISLE_N) + ISLE_N) % ISLE_N];
+  // the far side of every disc, on every bearing that passes through it
+  const reach = new Array(ISLE_N).fill(0);
+  for (const [x, z, r] of need) {
+    const dx = x - cx, dz = z - cz, rho = Math.hypot(dx, dz), phi = Math.atan2(dz, dx);
+    const span = rho <= r ? Math.PI : Math.asin(r / rho);
+    for (let i = Math.ceil((phi - span) / step); i <= Math.floor((phi + span) / step); i++) {
+      const d = i * step - phi, s = rho * Math.sin(d);
+      if (Math.abs(s) > r) continue;
+      const b = ((i % ISLE_N) + ISLE_N) % ISLE_N;
+      reach[b] = Math.max(reach[b], rho * Math.cos(d) + Math.sqrt(r * r - s * s));
+    }
+  }
+  // a dip between two parts of the town is filled across: each bearing reaches at least as far as
+  // the nearer of any two bearings up to ISLE_FILL either side of it
+  const filled = reach.map((r0, i) => {
+    let r = r0;
+    for (let j = 1; j <= ISLE_FILL; j++) r = Math.max(r, Math.min(at(reach, i - j), at(reach, i + j)));
+    return r;
+  });
+  // widened over ISLE_SMOOTH bearings each side, then averaged over as many, so no bearing comes in
+  const wide = filled.map((_, i) => { let r = 0; for (let j = -ISLE_SMOOTH; j <= ISLE_SMOOTH; j++) r = Math.max(r, at(filled, i + j)); return r; });
+  const waves = [[3, rnd() * 6.283, 0.5], [5, rnd() * 6.283, 0.3], [9, rnd() * 6.283, 0.2]];
+  const rim = wide.map((_, i) => {
+    let s = 0, w = 0;
+    for (let j = -ISLE_SMOOTH; j <= ISLE_SMOOTH; j++) s += at(wide, i + j);
+    for (const [n, ph, a] of waves) w += Math.sin(n * i * step + ph) * a;      // in [-1, 1]
+    return +(s / (2 * ISLE_SMOOTH + 1) + ISLAND_WOBBLE * (1 + w) / 2).toFixed(3);
+  });
+  const box = { x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity };
+  rim.forEach((r, i) => {
+    const x = cx + Math.cos(i * step) * r, z = cz + Math.sin(i * step) * r;
+    box.x0 = Math.min(box.x0, x - 1); box.x1 = Math.max(box.x1, x + 1); box.z0 = Math.min(box.z0, z - 1); box.z1 = Math.max(box.z1, z + 1);
+  });
+  return { cx, cz, rim, box, hx: Math.max(box.x1 - cx, cx - box.x0), hz: Math.max(box.z1 - cz, cz - box.z0) };
+}
+
+/**
+ * Signed distance into the island: positive on it, in tiles, measured along the bearing from its
+ * centre (so only roughly the nearest distance where the rim runs slantwise).
+ */
+function islandSdf(lay, x, z) {
+  const I = lay.island;
+  if (!I) return Infinity;
+  const dx = x - I.cx, dz = z - I.cz, N = I.rim.length;
+  const f = (Math.atan2(dz, dx) / (2 * Math.PI) * N + N) % N, i = Math.floor(f), w = f - i;
+  return I.rim[i] * (1 - w) + I.rim[(i + 1) % N] * w - Math.hypot(dx, dz);
+}
+
 /** Which floor (x, z) is on: the highest platform it is inside. */
 function floorAt(lay, x, z) {
   for (let k = lay.top; k >= 1; k--) if (floorSdf(lay, k, x, z) >= 0) return k;
@@ -679,7 +832,7 @@ function heightAt(lay, x, z) {
 const BaseLayoutAPI = {
   SQUARE_R, CRYSTAL_D, CRYSTAL_R, MAX_FLOOR, FLOOR_H, CORE_R, STAIR_LEN, STAIR_W, PAD, PLAZA_R, CLIFF, STYLES,
   ensure, layout, toWorld, toLocal, radiusOf, mulberry32, hashStr, segDist,
-  grow, bodySdf, shapeSdf, edgeAlong, edgeFrom, floorSdf, floorAt, onStair, heightAt,
+  grow, extraAt, bodySdf, shapeSdf, edgeAlong, edgeFrom, floorSdf, floorAt, onStair, heightAt, islandSdf, GROW_PER_FLOOR, ZONE, TERRACE_M,
 };
 if (typeof module !== 'undefined') module.exports = BaseLayoutAPI;
 if (typeof window !== 'undefined') window.BaseLayout = BaseLayoutAPI;

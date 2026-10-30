@@ -8,7 +8,9 @@
 // on the same terrain and scenery code with a style of its own. The town's floors are raised
 // platforms: the terrain takes its height from BaseLayout.heightAt (the same function the walking
 // grid is cut from), and buildTown adds stone retaining walls along each platform's foot, stairs
-// between floors, and a plaza with a banner on each floor.
+// between floors, and a plaza with a banner on each floor. The town is a floating island
+// (BaseLayout.islandSdf): the terrain is cut at its rim, and skyIsland() hangs a layered rock
+// underside below it, with roots, a few islets, a waterfall from its pond and clouds below.
 //
 // This is a second way of DRAWING the same field state, not a second simulation. Nothing in
 // here writes to the field; it reads `s.map`, `s.seen`, `s.actors` and `s.portal` and turns
@@ -68,7 +70,7 @@ const STYLE = {
     grass: ['#6a9a40', '#86b54e'], dry: '#bdb860', moss: '#55853a', dirt: '#b0905f', road: '#c2a675',
     rock: '#8c7b62', top: '#557f34',
     sky: '#d9eeff', groundLight: '#76603e', sun: '#fff0cf', sunI: 2.7, hemiI: 1.15,
-    fog: '#c6dbe0', mote: '#fff6c8', vignette: 0.38,
+    fog: '#bfe2f6', mote: '#fff6c8', vignette: 0.3,
   },
   under: {
     hill: 1.1, roll: 0.06, blocks: 0,
@@ -426,6 +428,7 @@ function create(cv, { fill = false } = {}) {
     // heights
     const nx = W * SUB + 1, nz = H * SUB + 1;
     const heights = new Float32Array(nx * nz), wallness = new Float32Array(nx * nz), roadness = new Float32Array(nx * nz);
+    const island = !!(map.layout && map.layout.island), isl = island ? new Float32Array(nx * nz) : null;
     for (let gz = 0; gz < nz; gz++) for (let gx = 0; gx < nx; gx++) {
       const px = gx / SUB - MARGIN, pz = gz / SUB - MARGIN, k = gz * nx + gx;
       const m = field(wallG, px, pz), rd = roadAt ? roadAt(px, pz) : field(roadG, px, pz);
@@ -433,6 +436,11 @@ function create(cv, { fill = false } = {}) {
       if (st.hill) h += Math.pow(m, 0.8) * st.hill * (0.7 + 0.6 * fbm(px * 0.3 + so, pz * 0.3 + 40)) + m * m * (fbm(px * 1.4, pz * 1.4 + so) - 0.3) * 0.5;
       h -= rd * 0.04;
       if (map.layout) h += BaseLayout.heightAt(map.layout, px - map.ox, pz - map.oz);
+      if (island) {
+        const e = BaseLayout.islandSdf(map.layout, px - map.ox, pz - map.oz);
+        isl[k] = e;
+        h -= 0.7 * (1 - sstep(0, 2.2, e));                  // the ground rounds down at the rim
+      }
       heights[k] = h; wallness[k] = m; roadness[k] = rd;
     }
     const heightAt = (x, z) => {
@@ -453,15 +461,17 @@ function create(cv, { fill = false } = {}) {
     }
     const idx = new Uint32Array((nx - 1) * (nz - 1) * 6);
     let n = 0;
+    // on an island, a triangle with any corner past the rim is left out: skyIsland's lip covers the cut
+    const on = (i) => !island || isl[i] > -0.15;
     for (let gz = 0; gz < nz - 1; gz++) for (let gx = 0; gx < nx - 1; gx++) {
       const a = gz * nx + gx, b = a + 1, c = a + nx, d = c + 1;
-      idx[n++] = a; idx[n++] = c; idx[n++] = b;
-      idx[n++] = b; idx[n++] = c; idx[n++] = d;
+      if (on(a) && on(c) && on(b)) { idx[n++] = a; idx[n++] = c; idx[n++] = b; }
+      if (on(b) && on(c) && on(d)) { idx[n++] = b; idx[n++] = c; idx[n++] = d; }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    geo.setIndex(new THREE.BufferAttribute(idx.subarray(0, n), 1));
     geo.computeVertexNormals();
 
     // vertex colour: ground by noise, dirt on roads, rock on slopes, darker tops, and a band of
@@ -1209,13 +1219,29 @@ function create(cv, { fill = false } = {}) {
       world.crystal = { mesh: crystal, halo, y: gy + 3.0 };
     }
 
-    // ----- the gate on the road out -----
+    // ----- the gate: a portal at the end of the road out, just inside the rim -----
     {
-      const gx = lay.gate.x + OX, gz = lay.gate.z + OZ, gy = heightAt(gx, gz), wood = mat(TIMBER);
-      for (const dx of [-2.0, 2.0]) root.add(mesh(new THREE.BoxGeometry(0.34, 2.8, 0.34).translate(0, 1.4, 0), wood, gx + dx, gy, gz));
-      root.add(mesh(new THREE.BoxGeometry(4.6, 0.3, 0.38), wood, gx, gy + 2.7, gz));
-      root.add(mesh(new THREE.PlaneGeometry(0.8, 1.0), mat('#7a5cc0', { double: true }), gx, gy + 2.05, gz + 0.2));
+      const gx = lay.gate.x + OX, gz = lay.gate.z + OZ, gy = heightAt(gx, gz);
+      const g = new THREE.Group(), stone = mat('#cfc4ad', { flat: true });
+      for (const sx of [-1, 1]) g.add(mesh(new THREE.CylinderGeometry(0.32, 0.4, 3.0, 8).translate(0, 1.5, 0), stone, sx * 1.95, 0, 0));
+      g.add(mesh(new THREE.TorusGeometry(1.95, 0.24, 8, 24, Math.PI).translate(0, 3.0, 0), stone));
+      const tex = portalTexture();
+      world.textures.push(tex);
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(1.75, 40), new THREE.MeshBasicMaterial({
+        map: tex, color: '#b48cff', transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
+      }));
+      disc.position.y = 2.1;
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: shared.glowTex, color: '#a07cff', blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.55 }));
+      glow.position.y = 2.1; glow.scale.setScalar(5);
+      g.add(disc, glow);
+      g.position.set(gx, gy, gz);
+      g.rotation.y = Math.atan2(lay.gate.ux, lay.gate.uz);         // the disc faces down the road
+      root.add(g);
+      world.portal = { disc, glow };
     }
+
+    // ----- the island's underside, roots, islets, the pond and its waterfall, clouds -----
+    skyIsland(lay, OX, OZ, heightAt, root, mat, mesh, box);
 
     // ----- trees past the extent, and a little green inside it -----
     const trunks = [], canopy = [], bushes = [], blooms = [];
@@ -1224,16 +1250,17 @@ function create(cv, { fill = false } = {}) {
       || Math.hypot(x - OX - lay.crystal.x, z - OZ - lay.crystal.z) < 3.4 || Math.hypot(x - OX, z - OZ) < lay.square.r + 1.2;
     const road = layoutRoads(lay, OX, OZ);
     const onPlatform = (x, z) => { for (let k = 1; k <= lay.top; k++) if (BaseLayout.floorSdf(lay, k, x - OX, z - OZ) > -2.2) return true; return false; };
-    // forest starts 1.5 tiles past the built-up box and thickens over the next 5
-    const bx = lay.bounds;
-    const outside = (x, z) => Math.hypot(Math.max(bx.x0 - (x - OX), 0, (x - OX) - bx.x1), Math.max(bx.z0 - (z - OZ), 0, (z - OZ) - bx.z1));
+    // a ring of trees just inside the rim, thickest 1-3 tiles in and gone by 7; nothing past the edge
+    const rim = (x, z) => BaseLayout.islandSdf(lay, x - OX, z - OZ);
+    const wet = (x, z) => lay.pond && Math.hypot(x - OX - lay.pond.x, z - OZ - lay.pond.z) < lay.pond.r + 1.6;
     for (let ty = -MARGIN; ty < map.h + MARGIN; ty++) for (let tx = -MARGIN; tx < map.w + MARGIN; tx++) {
       const r1 = hash(tx * 3 + so, ty * 7), r2 = hash(tx * 11, ty * 5 + so), r3 = hash(tx + 99, ty - so);
       const x = tx + 0.5 + (r2 - 0.5) * 0.6, z = ty + 0.5 + (r3 - 0.5) * 0.6;
-      if (road(x, z) > 0.05 || onPlatform(x, z)) continue;
-      const out = (outside(x, z) - 1.5) / 5;
+      const e = rim(x, z);
+      if (e < 0.9 || road(x, z) > 0.05 || onPlatform(x, z) || wet(x, z)) continue;
+      const out = e < 7 && !near(x, z) ? (1 - e / 7) : 0;
       const gy = heightAt(x, z);
-      if (out > 0 ? r1 < Math.min(1, out) * 0.6 : (!near(x, z) && r1 < 0.015)) {
+      if (out > 0 ? r1 < 0.08 + out * 0.5 : (!near(x, z) && r1 < 0.015)) {
         const sc = 0.8 + r2 * 0.7, hue = hash(tx, ty * 13);
         trunks.push(M4(x, gy, z, sc, sc, sc));
         for (const [ox, oy, oz, bs] of [[0, 0.95, 0, 1], [0.22, 0.72, 0.12, 0.72], [-0.2, 0.75, -0.1, 0.68]]) {
@@ -1362,6 +1389,228 @@ function create(cv, { fill = false } = {}) {
     }
   }
 
+  /**
+   * The floating island below the town, from BaseLayout.islandSdf.
+   *   underside  ISLE_RINGS rings under the rim (found on ISLE_N rays from the island's centre),
+   *              each at a depth below 0 and a radius of (rim radius - inset) x scale, jittered,
+   *              down to a tip; faceted, coloured grass at the lip, then soil, then banded rock.
+   *              For the first ~20 tiles down the cliff comes in no faster than 0.3 tiles per tile
+   *              of drop: the near rim is at the bottom of the view, where the line of sight is
+   *              PITCH + FOV / 2 = 73 degrees down and runs 0.3 out per unit of drop, so a cliff that
+   *              comes in faster than that is hidden behind the rock above it
+   *   roots      thin dangling cylinders from the soil ring
+   *   islets     ISLETS small islands round it, each a grass disc on a short cone, that bob
+   *   pond       lay.pond: water and a ring of rocks; a stream to the rim and a waterfall over it
+   *   clouds     CLOUDS sprites below the island and a few high ones off to its sides, drifting
+   * Depths scale with the island's size (depthScale).
+   */
+  const ISLE_N = 144, ISLETS = 5, CLOUDS = 44;
+  const ISLE_RINGS = [   // [depth, inset from the rim (negative: out), then scale]
+    [0.1, -0.25, 1], [0.9, -0.35, 1], [2.0, -0.4, 1], [4.0, 0.2, 1], [7.5, 1.2, 1], [12, 2.5, 1],
+    [17.5, 4.2, 1], [23, 7.5, 0.9], [28, 11, 0.7], [33, 14, 0.45], [37, 15, 0.2],
+  ];
+  const ISLE_TIP = 40;
+  const STRATA = ['#9b8467', '#7d6a55', '#a0896b', '#6e5e4d', '#8a7a64', '#77685a'].map(c => new THREE.Color(c));
+
+  /** A tapering faceted body: `ring(i)` gives rim point i (layout space); returns its geometry. */
+  function taper(rim, cx, cz, depthScale, OX, OZ, top = 0) {
+    const N = rim.length, rings = [];
+    ISLE_RINGS.forEach(([d, inset, sc], j) => {
+      rings.push(rim.map((p, i) => {
+        const jit = (hash(i * 7 + 3, j * 13) - 0.5) * (0.4 + j * 0.5);
+        const rad = Math.max(0.5, (p.e - inset * depthScale) * sc + jit);
+        return [cx + p.ux * rad + OX, top - d * depthScale + (hash(i, j * 5 + 1) - 0.5) * j * 0.35, cz + p.uz * rad + OZ];
+      }));
+    });
+    const tip = [cx + OX + (hash(9, 9) - 0.5) * 2, top - ISLE_TIP * depthScale, cz + OZ + (hash(8, 8) - 0.5) * 2];
+    const pos = [], col = [], c = new THREE.Color();
+    const shade = (y, j, i) => {
+      if (j === 0) return c.set('#5d8f3c');                           // the grass lip
+      if (j === 1) return c.set('#6e4b2e');                           // soil
+      const band = Math.floor((-y + hash(i >> 3, j) * 1.6) / 1.9) % STRATA.length;
+      c.copy(STRATA[(band + STRATA.length) % STRATA.length]);
+      if (j === 2 && hash(i, 77) < 0.35) c.lerp(new THREE.Color('#4f7a33'), 0.5);    // moss under the lip
+      return c.multiplyScalar(0.92 - j * 0.035);
+    };
+    const tri = (a, b, d, j, i) => {
+      pos.push(...a, ...b, ...d);
+      shade((a[1] + b[1] + d[1]) / 3, j, i);
+      for (let k = 0; k < 3; k++) col.push(c.r, c.g, c.b);
+    };
+    for (let j = 0; j + 1 < rings.length; j++) for (let i = 0; i < N; i++) {
+      const a = rings[j][i], b = rings[j][(i + 1) % N], d = rings[j + 1][i], e = rings[j + 1][(i + 1) % N];
+      tri(a, d, b, j, i); tri(b, d, e, j, i);
+    }
+    const last = rings[rings.length - 1];
+    for (let i = 0; i < N; i++) tri(last[i], tip, last[(i + 1) % N], rings.length - 1, i);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.computeVertexNormals();
+    return { geo, rings };
+  }
+
+  function skyIsland(lay, OX, OZ, heightAt, root, mat, mesh, box) {
+    const I = lay.island;
+    if (!I) return;
+    const rimAlong = (ux, uz) => {
+      let lo = 0, hi = 4 * (I.hx + I.hz);
+      for (let k = 0; k < 36; k++) { const m = (lo + hi) / 2; if (BaseLayout.islandSdf(lay, I.cx + ux * m, I.cz + uz * m) >= 0) lo = m; else hi = m; }
+      return lo;
+    };
+    const rim = [];
+    for (let i = 0; i < ISLE_N; i++) { const t = i / ISLE_N * Math.PI * 2, ux = Math.cos(t), uz = Math.sin(t); rim.push({ ux, uz, e: rimAlong(ux, uz) }); }
+    const depthScale = Math.max(0.8, Math.min(1.5, (I.hx + I.hz) / 90));
+    const rock = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide });
+    const body = taper(rim, I.cx, I.cz, depthScale, OX, OZ);
+    const under = new THREE.Mesh(body.geo, rock);
+    under.castShadow = true; under.receiveShadow = true;
+    root.add(under);
+
+    // roots off the soil ring
+    const roots = [];
+    for (let i = 0; i < ISLE_N; i += 5) {
+      if (hash(i, 31) < 0.45) continue;
+      const [x, y, z] = body.rings[1][i], len = 1.5 + hash(i, 32) * 4;
+      const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y - len / 2, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler((hash(i, 33) - 0.5) * 0.5, 0, (hash(i, 34) - 0.5) * 0.5)), new THREE.Vector3(1, len, 1));
+      roots.push(m);
+    }
+    if (roots.length) {
+      const im = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.11, 1, 5), mat('#5a3d22'), roots.length);
+      roots.forEach((m, i) => im.setMatrixAt(i, m));
+      root.add(im);
+    }
+
+    // islets: small islands round it at different heights, bobbing
+    world.islets = [];
+    const R = Math.max(I.hx, I.hz);
+    for (let k = 0; k < ISLETS; k++) {
+      const t = hash(k, 51) * Math.PI * 2, ux = Math.cos(t), uz = Math.sin(t);
+      const dist = rimAlong(ux, uz) + 7 + hash(k, 52) * 12, size = 1.8 + hash(k, 53) * 2.4;
+      const cx = I.cx + ux * dist, cz = I.cz + uz * dist, y = -6 + hash(k, 54) * 9;
+      const small = [];
+      for (let i = 0; i < 24; i++) { const a = i / 24 * Math.PI * 2; small.push({ ux: Math.cos(a), uz: Math.sin(a), e: size * (0.85 + hash(i + k * 31, 55) * 0.3) }); }
+      const isl = taper(small, 0, 0, size / 10, 0, 0);
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(isl.geo, rock));
+      const top = new THREE.Mesh(new THREE.CircleGeometry(size * 1.02, 24).rotateX(-Math.PI / 2), mat('#6a9a40'));
+      top.position.y = 0.02;
+      g.add(top);
+      if (size > 2.6) {
+        g.add(mesh(new THREE.CylinderGeometry(0.06, 0.1, 0.7, 7).translate(0, 0.35, 0), mat(TIMBER)));
+        const crown = mesh(lumpySphere(0.5, 1), mat('#4f8a34'), 0, 1.0, 0);
+        g.add(crown);
+      }
+      g.position.set(cx + OX, y, cz + OZ);
+      root.add(g);
+      world.islets.push({ g, y, phase: hash(k, 56) * 6 });
+    }
+
+    // the pond, a stream to the rim, and the waterfall over it
+    world.falls = [];
+    if (lay.pond && lay.fall) {
+      const P = lay.pond, F = lay.fall;
+      const px = P.x + OX, pz = P.z + OZ, py = heightAt(px, pz);
+      const water = new THREE.MeshLambertMaterial({ color: '#5fb6d8', emissive: '#1f5f7a', emissiveIntensity: 0.55, transparent: true, opacity: 0.92 });
+      const pond = new THREE.Mesh(new THREE.CircleGeometry(P.r, 28).rotateX(-Math.PI / 2), water);
+      pond.position.set(px, py + 0.06, pz);
+      root.add(pond);
+      for (let i = 0; i < 10; i++) {
+        const a = i / 10 * Math.PI * 2, rx = px + Math.cos(a) * (P.r + 0.2), rz = pz + Math.sin(a) * (P.r + 0.2);
+        root.add(mesh(new THREE.DodecahedronGeometry(0.28 + hash(i, 61) * 0.15, 0), mat('#a39882', { flat: true }), rx, heightAt(rx, rz) + 0.1, rz));
+      }
+      // stream: a strip from the pond's edge to the rim, laid on the ground
+      const sx0 = px + F.ux * P.r, sz0 = pz + F.uz * P.r, sx1 = F.x + OX, sz1 = F.z + OZ;
+      const segs = 8, spos = [];
+      const nxv = -F.uz * 0.45, nzv = F.ux * 0.45;
+      for (let i = 0; i < segs; i++) {
+        const t0 = i / segs, t1 = (i + 1) / segs;
+        const p0 = [sx0 + (sx1 - sx0) * t0, sz0 + (sz1 - sz0) * t0], p1 = [sx0 + (sx1 - sx0) * t1, sz0 + (sz1 - sz0) * t1];
+        const y0 = heightAt(p0[0], p0[1]) + 0.05, y1 = heightAt(p1[0], p1[1]) + 0.05;
+        spos.push(p0[0] - nxv, y0, p0[1] - nzv, p1[0] - nxv, y1, p1[1] - nzv, p1[0] + nxv, y1, p1[1] + nzv,
+          p0[0] - nxv, y0, p0[1] - nzv, p1[0] + nxv, y1, p1[1] + nzv, p0[0] + nxv, y0, p0[1] + nzv);
+      }
+      const sgeo = new THREE.BufferGeometry();
+      sgeo.setAttribute('position', new THREE.Float32BufferAttribute(spos, 3));
+      sgeo.computeVertexNormals();
+      root.add(new THREE.Mesh(sgeo, new THREE.MeshLambertMaterial({ color: '#5fb6d8', emissive: '#1f5f7a', emissiveIntensity: 0.55, side: THREE.DoubleSide })));
+      // the fall: a ribbon off the rim into the clouds, its texture scrolling down
+      const tex = fallTexture();
+      world.textures.push(tex);
+      const H = 22 * depthScale;
+      const fall = new THREE.Mesh(new THREE.PlaneGeometry(1.5, H, 1, 8).translate(0, -H / 2, 0), new THREE.MeshBasicMaterial({
+        map: tex, color: '#ffffff', transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false,
+      }));
+      fall.position.set(sx1 + F.ux * 0.5, heightAt(sx1, sz1) - 0.2, sz1 + F.uz * 0.5);
+      fall.rotation.y = Math.atan2(F.ux, F.uz);
+      root.add(fall);
+      const mist = new THREE.Sprite(new THREE.SpriteMaterial({ map: shared.glowTex, color: '#ffffff', depthWrite: false, opacity: 0.5 }));
+      mist.position.set(fall.position.x + F.ux * 0.3, fall.position.y - 0.3, fall.position.z + F.uz * 0.3);
+      mist.scale.setScalar(2.4);
+      root.add(mist);
+      world.falls.push({ tex });
+    }
+
+    // clouds: a layer below the island and a few high ones beside it, drifting east
+    world.clouds = [];
+    const ctex = cloudTexture();
+    world.textures.push(ctex);
+    for (let k = 0; k < CLOUDS; k++) {
+      const high = k < 8;
+      const t = hash(k, 71) * Math.PI * 2, rr = high ? R * (1.25 + hash(k, 72) * 0.6) : R * hash(k, 72) * 1.9;
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: ctex, color: high ? '#ffffff' : '#f2f8ff', transparent: true, depthWrite: false,
+        opacity: high ? 0.75 : 0.55 + hash(k, 73) * 0.3, fog: true }));
+      const sc = (high ? 9 : 12) + hash(k, 74) * 14;
+      sp.scale.set(sc, sc * 0.55, 1);
+      const x = I.cx + Math.cos(t) * rr + OX, z = I.cz + Math.sin(t) * rr + OZ, y = high ? 3 + hash(k, 75) * 6 : -12 - hash(k, 76) * 24;
+      sp.position.set(x, y, z);
+      root.add(sp);
+      world.clouds.push({ sp, speed: 0.0006 + hash(k, 77) * 0.0008, span: R * 2.4, cx: I.cx + OX });
+    }
+  }
+
+  function cloudTexture() {
+    const c = canvas(128, 64), g = c.getContext('2d');
+    for (let i = 0; i < 14; i++) {
+      const x = 22 + hash(i, 1) * 84, y = 26 + hash(i, 2) * 18, r = 12 + hash(i, 3) * 18;
+      const grd = g.createRadialGradient(x, y, 0, x, y, r);
+      grd.addColorStop(0, 'rgba(255,255,255,.9)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grd; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+  function fallTexture() {
+    const c = canvas(32, 128), g = c.getContext('2d');
+    g.fillStyle = 'rgba(214,238,255,.78)'; g.fillRect(0, 0, 32, 128);
+    for (let i = 0; i < 40; i++) {
+      const x = hash(i, 11) * 32, y = hash(i, 12) * 128, l = 10 + hash(i, 13) * 40;
+      g.fillStyle = `rgba(255,255,255,${0.35 + hash(i, 14) * 0.5})`;
+      g.fillRect(x, y, 1.5, l); g.fillRect(x, y - 128, 1.5, l);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(1, 3);
+    return t;
+  }
+  function portalTexture() {
+    const c = canvas(128), g = c.getContext('2d');
+    const grd = g.createRadialGradient(64, 64, 4, 64, 64, 64);
+    grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.5, 'rgba(190,150,255,.6)'); grd.addColorStop(1, 'rgba(120,80,255,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+    g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 3;
+    for (let i = 0; i < 5; i++) {
+      g.beginPath();
+      for (let t = 0; t < 40; t++) { const a = i * 1.256 + t * 0.12, r = t * 1.5; g.lineTo(64 + Math.cos(a) * r, 64 + Math.sin(a) * r); }
+      g.stroke();
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
   /** Smoke puffs over one chimney: SMOKE sprites cycling up, growing and fading. */
   const SMOKE = 6;
   function addSmoke(at, shade) {
@@ -1396,6 +1645,16 @@ function create(cv, { fill = false } = {}) {
       world.crystal.mesh.rotation.y += dt * 0.0005;
       world.crystal.mesh.position.y = world.crystal.y + Math.sin(clockMs * 0.0012) * 0.15;
       world.crystal.halo.material.opacity = 0.45 + 0.12 * Math.sin(clockMs * 0.002);
+    }
+    if (world.portal) {
+      world.portal.disc.rotation.z -= dt * 0.0012;
+      world.portal.glow.material.opacity = 0.45 + 0.15 * Math.sin(clockMs * 0.003);
+    }
+    for (const it of world.islets || []) it.g.position.y = it.y + Math.sin(clockMs * 0.0006 + it.phase) * 0.6;
+    for (const f of world.falls || []) f.tex.offset.y += dt * 0.0009;
+    for (const c of world.clouds || []) {
+      c.sp.position.x += dt * c.speed;
+      if (c.sp.position.x > c.cx + c.span) c.sp.position.x -= c.span * 2;
     }
   }
 
@@ -2081,8 +2340,14 @@ function create(cv, { fill = false } = {}) {
     const map = sim.map;
     if (!world || world.map !== map) {
       build(map, 'town', (x, y) => (x >= 0 && y >= 0 && x < map.w && y < map.h) ? map.at(x, y) : T.FLOOR);
-      const b = map.layout.bounds;
-      world.focus = { x0: b.x0 + map.ox, x1: b.x1 + map.ox, z0: b.z0 + map.oz, z1: b.z1 + map.oz };
+      // Room south of the island for the cliff under its near rim. A view centred on a box shows less
+      // ground in front of the centre than past it (the bottom of the view looks PITCH + FOV / 2
+      // down): `front` is that share of the box's depth when the depth sets the distance
+      // (fitDistance). The box reaches south until the rim and the cliff's first 20 tiles fit.
+      const b = map.layout.bounds, vf = FOV * Math.PI / 180, low = PITCH + vf / 2;
+      const front = (Math.cos(PITCH) - Math.sin(PITCH) / Math.tan(low)) * Math.sin(PITCH) / (2 * Math.tan(vf / 2)) * 1.04;
+      const room = (20 / Math.tan(low) + (0.5 - front) * (b.z1 - b.z0)) / (0.5 + front);
+      world.focus = { x0: b.x0 + map.ox, x1: b.x1 + map.ox, z0: b.z0 + map.oz, z1: b.z1 + map.oz + room };
     }
     if (clockMs - lastOverlayAt > 66 || lastOverlayAt < 0) { drawThreads(knots || []); lastOverlayAt = clockMs; }
     const cam = placeCamera(want, dt);
