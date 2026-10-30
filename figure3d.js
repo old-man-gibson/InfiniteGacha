@@ -87,10 +87,10 @@ function noise3(x, y, z) {
 // Per body type. H is crown height in tiles (a door lintel is 1.25). Widths are full widths in
 // tiles at H; `legs` is hip-joint height as a fraction of H; `limb` scales limb radii.
 const BODY = {
-  male:     { H: 1.12, sh: 0.30,  hip: 0.155, chest: [0.25, 0.165], waist: [0.21, 0.145], pelvis: [0.235, 0.155], limb: 1.0,  thigh: 1.0,  bust: 0, legs: 0.52, head: 1.0,  mass: 0.45 },
-  female:   { H: 1.07, sh: 0.255, hip: 0.165, chest: [0.215, 0.145], waist: [0.175, 0.13], pelvis: [0.245, 0.16], limb: 0.86, thigh: 1.12, bust: 1, legs: 0.53, head: 0.97, mass: 0.32 },
-  muscular: { H: 1.2,  sh: 0.37,  hip: 0.175, chest: [0.32, 0.2],   waist: [0.26, 0.17],  pelvis: [0.27, 0.17],  limb: 1.32, thigh: 1.05, bust: 0, legs: 0.5,  head: 0.98, mass: 0.75 },
-  teen:     { H: 0.86, sh: 0.30,  hip: 0.17,  chest: [0.28, 0.19],  waist: [0.26, 0.18],  pelvis: [0.26, 0.17],  limb: 1.2,  thigh: 1.05, bust: 0, legs: 0.43, head: 1.06, mass: 0.6 },
+  male:     { H: 1.12, sh: 0.30,  hip: 0.155, chest: [0.25, 0.165], waist: [0.205, 0.145], pelvis: [0.23, 0.155], limb: 1.0,  thigh: 1.0,  bust: 0, pec: 0.07, legs: 0.52, head: 1.0,  mass: 0.45 },
+  female:   { H: 1.07, sh: 0.255, hip: 0.165, chest: [0.215, 0.145], waist: [0.172, 0.13], pelvis: [0.245, 0.16], limb: 0.86, thigh: 1.12, bust: 1, pec: 0, legs: 0.53, head: 0.97, mass: 0.32 },
+  muscular: { H: 1.2,  sh: 0.37,  hip: 0.175, chest: [0.32, 0.2],   waist: [0.25, 0.17],  pelvis: [0.265, 0.17], limb: 1.24, thigh: 1.05, bust: 0, pec: 0.12, legs: 0.5,  head: 1.0,  mass: 0.75 },
+  teen:     { H: 0.86, sh: 0.30,  hip: 0.17,  chest: [0.28, 0.19],  waist: [0.26, 0.18],  pelvis: [0.26, 0.17],  limb: 1.2,  thigh: 1.05, bust: 0, pec: 0.05, legs: 0.43, head: 1.06, mass: 0.6 },
 };
 // Per race: height, girth, limb thickness and head size multipliers, arm length.
 const RACE = {
@@ -140,12 +140,13 @@ function hashColour(s) {
   return '#' + [h & 255, (h >> 8) & 255, (h >> 16) & 255].map(v => (64 + (v >> 1)).toString(16).padStart(2, '0')).join('');
 }
 // Position between ramp index 3 and 4 used for lit metal, by metal name.
-const METAL_MIX = { iron: 1.3, steel: 0.45, silver: 0.5, gold: 0.7, brass: 0.45, copper: 0.35, bronze: 0.4, ceramic: 0.4 };
+const METAL_MIX = { iron: 1.3, steel: 0.45, silver: 0.5, gold: 0.7, brass: 0.45, copper: 0.1, bronze: 0.4, ceramic: 0.4 };
 function metalTone(r, name) {
   if (!r) return null;
   const k = METAL_MIX[name] != null ? METAL_MIX[name] : 0.4;
   const a = Math.min(r.length - 1, 3 + Math.floor(k)), b = Math.min(r.length - 1, a + 1);
-  return '#' + colourHexMix(r[a], r[b], k - Math.floor(k));
+  const hex = colourHexMix(r[a], r[b], k - Math.floor(k));
+  return '#' + (name === 'copper' ? colourHexMix('#' + hex, '#6e6660', 0.3) : hex);
 }
 function colourHexMix(a, b, t) {
   const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16)), pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
@@ -344,7 +345,9 @@ function describe(ch) {
   const headSel = find(/^head\/heads\//);
   const head = headKind(headSel ? headSel.id : '', bt);
   const skeletal = !!find(/body_skeleton/) || head.kind === 'skull';
-  const skin = skeletal ? '#e2dccb' : (tone(ch.skinTarget ? ramp('body', ch.skinTarget.ref, ch.skinTarget.name) : null, 3) || '#e4a47c');
+  const skinRamp = ch.skinTarget ? ramp('body', ch.skinTarget.ref, ch.skinTarget.name) : null;
+  // 30% of the way to the next lighter ramp step: the mid step alone reads orange under the toon ramp
+  const skin = skeletal ? '#e2dccb' : skinRamp ? '#' + colourHexMix(skinRamp[3], skinRamp[4], 0.3) : '#e4a47c';
   const eye = tone(headSel && headSel.targets && headSel.targets[1] ? ramp('eye', headSel.targets[1].ref, headSel.targets[1].name) : null, 1) || '#3a3040';
 
   // ----- proportions -----
@@ -352,10 +355,10 @@ function describe(ch) {
   const k = H / B.H;
   const wid = (RC.width || 1) * jit(0.045);
   const limb = B.limb * (RC.limb || 1) * jit(0.06);
-  const headS = B.head * (RC.head || 1) * head.size * jit(0.025);
+  const headS = 1.07 * B.head * (RC.head || 1) * head.size * jit(0.025);
   const legs = H * B.legs;
   const headH = H * 0.14 * headS;
-  const neck = H * 0.04;
+  const neck = H * 0.034;
   const torso = H - legs - neck - headH;
   const arm = (RC.arm || 1) * jit(0.02);
   const p = {
@@ -368,7 +371,7 @@ function describe(ch) {
     pelvisW: B.pelvis[0] * k * wid / 2, pelvisD: B.pelvis[1] * k * wid / 2,
     upperArm: H * 0.185 * arm, forearm: H * 0.155 * arm, hand: H * 0.07,
     foot: legs * 0.27, footW: 0.034 * k * Math.sqrt(limb),
-    bust: B.bust, belly: (head.cheek > 0.3 ? 0.5 : 0) + (race === 'halfgiant' || race === 'dwarf' ? 0.3 : 0) + rnd() * 0.2,
+    bust: B.bust, pec: B.pec, belly: (head.cheek > 0.3 ? 0.5 : 0) + (race === 'halfgiant' || race === 'dwarf' ? 0.3 : 0) + rnd() * 0.2,
   };
   const L = (v) => v * k * limb;
   p.r = {
@@ -502,6 +505,18 @@ function bindPositions(look) {
  * Collects triangles in model space with colour and skin attributes. add() takes a geometry that
  * already carries `color`, `skinIndex`, `skinWeight` (from paint()) or paints it uniformly.
  */
+// Surface kinds, written per vertex as the `surf` attribute and read by the figure shader
+// (stylize): metal and hair get a highlight, chain gets a ring pattern, skin a warm floor.
+const SURF = { cloth: 0, skin: 1, hair: 2, metal: 3, leather: 4, gloss: 5, chain: 6 };
+// hex (lower case) -> surface kind, filled for the duration of one build (buildBody, propGeometry)
+let SURFS = null;
+/** Surface kind of a colour value: a tagged Color carries its own, a hex is looked up in SURFS. */
+function surfOf(v) {
+  if (v && v.isColor) return v.surf || 0;
+  return (SURFS && typeof v === 'string' && SURFS.get(v.toLowerCase())) || 0;
+}
+const tagged = (c, surf) => { c.surf = surf; return c; };
+
 class Mesher {
   constructor() { this.parts = []; }
   add(geo, colour = null, weights = null) {
@@ -515,13 +530,14 @@ class Mesher {
     let n = 0;
     for (const g of this.parts) n += g.getAttribute('position').count;
     const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
-    const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), sf = new Float32Array(n);
     let o = 0;
     for (const g of this.parts) {
       const c = g.getAttribute('position').count;
       pos.set(g.getAttribute('position').array, o * 3);
       nor.set(g.getAttribute('normal').array, o * 3);
       col.set(g.getAttribute('color').array, o * 3);
+      if (g.getAttribute('surf')) sf.set(g.getAttribute('surf').array, o);
       si.set(g.getAttribute('skinIndex').array, o * 4);
       sw.set(g.getAttribute('skinWeight').array, o * 4);
       o += c;
@@ -533,6 +549,7 @@ class Mesher {
     geo.setAttribute('color', new T.BufferAttribute(col, 3));
     geo.setAttribute('skinIndex', new T.BufferAttribute(si, 4));
     geo.setAttribute('skinWeight', new T.BufferAttribute(sw, 4));
+    geo.setAttribute('surf', new T.BufferAttribute(sf, 1));
     geo.computeBoundingSphere();
     return geo;
   }
@@ -558,20 +575,22 @@ function normWeightsRaw(w) {
   const s = out.reduce((t, e) => t + e[1], 0) || 1;
   return out.slice(0, 4).map(([b, v]) => [b, v / s]);
 }
-/** Write color / skinIndex / skinWeight attributes. colourFn and weightFn may be constants. */
+/** Write color / surf / skinIndex / skinWeight attributes. colourFn and weightFn may be constants. */
 function paint(geo, colourFn, weightFn) {
   const T = E(), P = geo.getAttribute('position'), n = P.count;
-  const col = new Float32Array(n * 3), si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
-  const cConst = typeof colourFn === 'function' ? null : colour(colourFn);
+  const col = new Float32Array(n * 3), sf = new Float32Array(n), si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+  const cConst = typeof colourFn === 'function' ? null : colour(colourFn), sConst = surfOf(colourFn);
   const wConst = typeof weightFn === 'function' ? null : normWeights(weightFn || 'root');
   for (let i = 0; i < n; i++) {
     const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
-    const c = cConst || colour(colourFn(x, y, z, i));
+    const v = cConst ? null : colourFn(x, y, z, i), c = cConst || colour(v);
     col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+    sf[i] = cConst ? sConst : surfOf(v);
     const w = wConst || normWeights(weightFn(x, y, z, i));
     for (let j = 0; j < w.length; j++) { si[i * 4 + j] = w[j][0]; sw[i * 4 + j] = w[j][1]; }
   }
   geo.setAttribute('color', new T.BufferAttribute(col, 3));
+  geo.setAttribute('surf', new T.BufferAttribute(sf, 1));
   geo.setAttribute('skinIndex', new T.BufferAttribute(si, 4));
   geo.setAttribute('skinWeight', new T.BufferAttribute(sw, 4));
   return geo;
@@ -628,11 +647,12 @@ function loft(rings, seg, { capTop = 0.6, capBottom = 0.6, colourOf = null } = {
     if (top.length) capTop *= 0.15;
     if (bot.length) capBottom *= 0.15;
   }
-  const R = rings.length, pos = [], col = [], si = [], sw = [], idx = [];
+  const R = rings.length, pos = [], col = [], sf = [], si = [], sw = [], idx = [];
   const push = (x, y, z, ring, a, w) => {
     pos.push(x, y, z);
-    const cc = colour(colourOf ? colourOf(a, y, ring) : (typeof ring.c === 'function' ? ring.c(a, y) : ring.c || '#ff00ff'));
+    const v = colourOf ? colourOf(a, y, ring) : (typeof ring.c === 'function' ? ring.c(a, y) : ring.c || '#ff00ff'), cc = colour(v);
     col.push(cc.r, cc.g, cc.b);
+    sf.push(surfOf(v));
     for (let j = 0; j < 4; j++) { si.push(w[j] ? w[j][0] : 0); sw.push(w[j] ? w[j][1] : 0); }
   };
   for (const g of rings) {
@@ -665,6 +685,7 @@ function loft(rings, seg, { capTop = 0.6, capBottom = 0.6, colourOf = null } = {
   const geo = new T.BufferGeometry();
   geo.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
   geo.setAttribute('color', new T.Float32BufferAttribute(col, 3));
+  geo.setAttribute('surf', new T.Float32BufferAttribute(sf, 1));
   geo.setAttribute('skinIndex', new T.Uint16BufferAttribute(si, 4));
   geo.setAttribute('skinWeight', new T.Float32BufferAttribute(sw, 4));
   geo.setIndex(idx);
@@ -679,7 +700,7 @@ function loft(rings, seg, { capTop = 0.6, capBottom = 0.6, colourOf = null } = {
  */
 function sweep(path, radius, seg, colourFn, weightFn, { up = null, cap0 = 0.5, cap1 = 0.5 } = {}) {
   const T = E(), V = T.Vector3;
-  const n = path.length, pos = [], col = [], si = [], sw = [], idx = [];
+  const n = path.length, pos = [], col = [], sf = [], si = [], sw = [], idx = [];
   const tan = [], nor = [], bin = [];
   for (let i = 0; i < n; i++) {
     const a = path[Math.max(0, i - 1)], b = path[Math.min(n - 1, i + 1)];
@@ -694,10 +715,14 @@ function sweep(path, radius, seg, colourFn, weightFn, { up = null, cap0 = 0.5, c
     nor.push(N);
     bin.push(new V().crossVectors(tan[i], N).normalize());
   }
-  const ringOf = (t) => [colour(typeof colourFn === 'function' ? colourFn(t) : colourFn), normWeights(typeof weightFn === 'function' ? weightFn(t) : weightFn)];
-  const pushV = (p, [c, w]) => {
+  const ringOf = (t) => {
+    const v = typeof colourFn === 'function' ? colourFn(t) : colourFn;
+    return [colour(v), normWeights(typeof weightFn === 'function' ? weightFn(t) : weightFn), surfOf(v)];
+  };
+  const pushV = (p, [c, w, f]) => {
     pos.push(p.x, p.y, p.z);
     col.push(c.r, c.g, c.b);
+    sf.push(f);
     for (let j = 0; j < 4; j++) { si.push(w[j] ? w[j][0] : 0); sw.push(w[j] ? w[j][1] : 0); }
   };
   const tmp = new V();
@@ -739,6 +764,7 @@ function sweep(path, radius, seg, colourFn, weightFn, { up = null, cap0 = 0.5, c
   const geo = new T.BufferGeometry();
   geo.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
   geo.setAttribute('color', new T.Float32BufferAttribute(col, 3));
+  geo.setAttribute('surf', new T.Float32BufferAttribute(sf, 1));
   geo.setAttribute('skinIndex', new T.Uint16BufferAttribute(si, 4));
   geo.setAttribute('skinWeight', new T.Float32BufferAttribute(sw, 4));
   geo.setIndex(idx);
@@ -800,8 +826,8 @@ function sheet(pts, thick = 0.003) {
 
 // ---------- body ----------
 
-const mix = (a, b, t) => colour(a).clone().lerp(colour(b), t);
-const shade = (hex, k) => colour(hex).clone().multiplyScalar(k);
+const mix = (a, b, t) => tagged(colour(a).clone().lerp(colour(b), t), surfOf(a));
+const shade = (hex, k) => tagged(colour(hex).clone().multiplyScalar(k), surfOf(hex));
 /** Metal under a fixed highlight: brighter toward the front-left of the ring, darker behind. */
 const sheen = (hex, a) => shade(hex, 0.86 + 0.32 * Math.max(0, Math.cos(a - 0.7)) ** 2);
 
@@ -812,10 +838,17 @@ function headShape(hd, x, y, z) {
   x *= 1 - low * (1 - jaw) * 0.42;
   if (z > 0) z *= 1 - low * 0.12 + low * hd.chin * 0.1;
   if (y > 0) x *= 1 + y * 0.04;
-  if (z < 0) z *= 1.05;
+  if (z < 0) z *= 1.08 + 0.04 * Math.max(0, y);
   // cheeks: in at the sides below the eyes when hollow, out when plump
   const cheekBand = Math.exp(-Math.pow((y + 0.25) / 0.25, 2)) * Math.max(0, z);
   x *= 1 + hd.cheek * 0.07 * cheekBand;
+  if (!hd.muzzle && hd.kind !== 'alien') {
+    if (z > 0.55) z = 0.55 + (z - 0.55) * 0.8;                                                   // face plane
+    x *= 1 + 0.045 * Math.exp(-Math.pow((y + 0.05) / 0.14, 2)) * sstep(0.2, 0.7, z);           // cheekbones
+    x *= 1 - 0.05 * Math.exp(-Math.pow((y - 0.3) / 0.18, 2)) * sstep(0.3, 0.8, z);              // temples
+    z += 0.06 * (0.4 + hd.brow) * Math.exp(-Math.pow((y - 0.2) / 0.07, 2)) * sstep(0.5, 0.8, z) * (1 - x * x);   // brow ridge
+    z += 0.07 * (0.5 + hd.chin) * Math.exp(-Math.pow((y + 0.84) / 0.13, 2)) * sstep(0.2, 0.7, z) * (1 - 2 * x * x); // chin
+  }
   if (hd.flat && y > 0.6) y = 0.6 + (y - 0.6) * 0.4;
   if (hd.kind === 'alien') { if (y > 0) { y *= 1.35; z -= y * 0.25; } x *= 1 - low * 0.3; }
   if (hd.kind === 'skull') { x *= 1 - low * 0.2; }
@@ -823,7 +856,32 @@ function headShape(hd, x, y, z) {
   return [x, y, z];
 }
 
+/** Which of a character's colours are skin, hair, metal, chain, leather or gloss. */
+function surfacesOf(look) {
+  const m = new Map(), reg = (hex, kind) => { if (typeof hex === 'string' && !m.has(hex.toLowerCase())) m.set(hex.toLowerCase(), kind); };
+  reg(look.skin, SURF.skin);
+  for (const h of [look.hair, look.beard, look.stache]) if (h) reg(h.colour, SURF.hair);
+  if (look.ears && look.ears.furry) reg(look.ears.colour, SURF.hair);
+  if (look.tail && look.tail.kind !== 'lizard') reg(look.tail.colour, SURF.hair);
+  if (look.mail) { reg(look.mail.metal, look.mail.kind === 'medium' ? SURF.chain : SURF.metal); reg(look.mail.leather, SURF.leather); }
+  for (const g of [look.helm, look.boots]) if (g) { reg(g.metal, SURF.metal); reg(g.leather, SURF.leather); }
+  if (look.armPlate) reg(look.armPlate, SURF.metal);
+  if (look.visor) reg(look.visor.metal, SURF.metal);
+  if (look.legs && look.legs.cut === 'plate') reg(look.legs.colour, SURF.metal);
+  if (look.feet) reg(look.feet.colour, look.feet.cut === 'plate' ? SURF.metal : /boots|fold|rim|shoes|hoofs/.test(look.feet.cut) ? SURF.leather : SURF.cloth);
+  if (look.horns) reg(look.horns.colour, SURF.leather);
+  for (const g of ['#efece6', '#d6c24a', look.eye, '#efe6cc', '#f4f0e6', '#1c140c', '#0c0a12', '#79c8ff']) reg(g, SURF.gloss);
+  reg('#2a2420', SURF.leather);
+  return m;
+}
+
 function buildBody(look) {
+  const prev = SURFS;
+  SURFS = surfacesOf(look);
+  try { return buildBodyRaw(look); } finally { SURFS = prev; }
+}
+
+function buildBodyRaw(look) {
   const T = E(), V = T.Vector3;
   const p = look.p, r = p.r, Bp = bindPositions(look);
   const M = new Mesher();
@@ -872,18 +930,20 @@ function buildBody(look) {
   const bustF = p.bust ? 1 + 0.32 * p.bust : 1;
   const hemYs = [waistY - p.waist * 0.07, waistY + p.waist * 0.07, shirtBottom];
   const shoulderTop = Math.min(p.chestW * 1.02, p.shoulder - r.arm * 0.3);
+  const pecF = 1 + p.pec, pecChest = Math.max(bustF, pecF);
   let torso = [
-    { y: hipY - p.pelvis * 0.5, rx: p.pelvisW * 0.58, rz: p.pelvisD * 0.66, w: 'hips' },
+    { y: hipY - p.pelvis * 0.4, rx: p.pelvisW * 0.52, rz: p.pelvisD * 0.62, w: 'hips' },
     { y: hipY - p.pelvis * 0.08, rx: p.pelvisW * 0.94, rz: p.pelvisD * 0.95, rzB: p.pelvisD * 1.05, w: 'hips' },
     { y: hipY + p.pelvis * 0.4, rx: p.pelvisW, rz: p.pelvisD, rzB: p.pelvisD * 1.08, w: 'hips' },
     { y: spineY, rx: lerp(p.pelvisW, p.waistW, 0.6), rz: lerp(p.pelvisD, p.waistD, 0.6) * (1 + belly * 0.1), w: [['hips', 0.5], ['spine', 0.5]] },
     { y: spineY + p.waist * 0.55, rx: p.waistW * bulk, rz: p.waistD * bulk, rzF: p.waistD * bulk * (1 + belly * 0.25), w: 'spine' },
     { y: chestY, rx: lerp(p.waistW, p.chestW, 0.6) * bulk, rz: lerp(p.waistD, p.chestD, 0.6) * bulk, rzF: lerp(p.waistD, p.chestD, 0.6) * bulk * (1 + belly * 0.12), w: [['spine', 0.5], ['chest', 0.5]] },
-    { y: chestY + p.chest * 0.42, rx: p.chestW * bulk, rz: p.chestD * bulk, rzF: p.chestD * bulk * bustF, sq: 2.15, w: 'chest' },
-    { y: chestY + p.chest * 0.72, rx: shoulderTop * bulk, rz: p.chestD * 0.9 * bulk, sq: 2.2, w: 'chest' },
-    { y: chestY + p.chest * 0.86, rx: shoulderTop * 0.84 * bulk, rz: p.chestD * 0.78, sq: 2.1, w: 'chest' },
-    { y: chestY + p.chest * 0.96, rx: lerp(r.neck * 1.5, p.chestW * 0.62, 0.5), rz: p.chestD * 0.6, w: [['chest', 0.85], ['neck', 0.15]] },
-    { y: neckY + p.neck * 0.1, rx: r.neck * 1.25, rz: r.neck * 1.2, w: [['chest', 0.4], ['neck', 0.6]] },
+    { y: chestY + p.chest * 0.42, rx: p.chestW * bulk, rz: p.chestD * bulk, rzF: p.chestD * bulk * pecChest, sq: 2.15, w: 'chest' },
+    { y: chestY + p.chest * 0.58, rx: lerp(p.chestW, shoulderTop, 0.5) * bulk, rz: p.chestD * bulk, rzF: p.chestD * bulk * lerp(1, pecChest, 0.75), rzB: p.chestD * bulk * 1.07, sq: 2.2, w: 'chest' },
+    { y: chestY + p.chest * 0.74, rx: shoulderTop * bulk, rz: p.chestD * 0.9 * bulk, rzB: p.chestD * 0.96 * bulk, sq: 2.2, w: 'chest' },
+    { y: chestY + p.chest * 0.88, rx: shoulderTop * 0.82 * bulk, rz: p.chestD * 0.76, sq: 2.1, w: 'chest' },
+    { y: chestY + p.chest * 0.97, rx: lerp(r.neck * 1.5, p.chestW * 0.62, 0.65), rz: p.chestD * 0.6, w: [['chest', 0.85], ['neck', 0.15]] },
+    { y: neckY + p.neck * 0.35, rx: r.neck * 1.32, rz: r.neck * 1.22, w: [['chest', 0.35], ['neck', 0.65]] },
   ];
   const torsoAt = (y) => {
     for (let i = 0; i < torso.length - 1; i++) {
@@ -896,7 +956,7 @@ function buildBody(look) {
     return y < torso[0].y ? [torso[0].rx, torso[0].rz] : [p.chestW, p.chestD];
   };
   torso = refine(torso, hemYs);
-  M.add(loft(torso, 16, { capTop: null, capBottom: 0.5, colourOf: (a, y) => torsoColour(a, y) }));
+  M.add(loft(torso, 20, { capTop: null, capBottom: 0.35, colourOf: (a, y) => torsoColour(a, y) }));
   // neck
   const neckCol = look.helm && look.helm.kind === 'light' ? look.helm.leather : skin;
   M.add(loft([
@@ -929,7 +989,7 @@ function buildBody(look) {
     const puff = sleeve === 'puff' ? 1.35 : sh && sh.body === 'robe' ? 1.15 : sleeve === 'long' ? 1.07 : 1;
     const pl = plate ? 1.15 : chain ? 1.06 : 1;
     let rings = [
-      { y: J.y, rx: r.arm * 1.16 * pl, rz: r.arm * 1.2 * pl, x: ex - s * r.arm * 0.1, w: [[A, 0.65], [C, 0.35]] },
+      { y: J.y, rx: r.arm * 1.07 * pl, rz: r.arm * 1.12 * pl, x: ex - s * r.arm * 0.15, w: [[A, 0.65], [C, 0.35]] },
       { y: J.y - p.upperArm * 0.2, rx: r.arm * 1.1 * puff * pl, rz: r.arm * 1.1 * puff * pl, x: ex + s * r.arm * 0.06, w: A },
       { y: J.y - p.upperArm * 0.55, rx: r.arm * 0.94 * puff * pl, rz: r.arm * 1.0 * puff * pl, x: ex, w: A },
       { y: J.y - p.upperArm * 0.86, rx: r.elbow * 1.05 * pl, rz: r.elbow * 1.08 * pl, x: ex, w: A },
@@ -940,7 +1000,14 @@ function buildBody(look) {
       { y: wristY, rx: r.wrist, rz: r.wrist * 0.9, x: ex, w: [[F, 0.6], [Hd, 0.4]] },
     ];
     rings = refine(rings, [sleeveEnd, wristY + p.forearm * 0.45, wristY + p.forearm * 0.05, elbowY - p.forearm * 0.05]);
-    M.add(loft(rings, 12, { capTop: 0.85, capBottom: 0.3, colourOf: (a, y) => armColour(a, y) }));
+    M.add(loft(rings, 12, { capTop: 0.7, capBottom: 0.3, colourOf: (a, y) => armColour(a, y) }));
+    if (sh && !mail && (sleeve === 'short' || sleeve === 'long' || sleeve === 'puff')) {
+      const [cr, cz] = radiusAt(rings, sleeveEnd), lip = sleeve === 'puff' ? 1.05 : 1.12, F2 = sleeveEnd < elbowY ? F : A;
+      M.add(loft([
+        { y: sleeveEnd + p.H * 0.008, rx: cr * lip, rz: cz * lip, x: ex, w: F2, c: shade(sh.colour, 0.9) },
+        { y: sleeveEnd - p.H * 0.003, rx: cr * lip, rz: cz * lip, x: ex, w: F2, c: shade(sh.colour, 0.72) },
+      ], 12, { capTop: null, capBottom: null }));
+    }
     // cuffs and robe sleeves
     if (sh && sh.body === 'robe') {
       M.add(loft([
@@ -948,10 +1015,11 @@ function buildBody(look) {
         { y: wristY + p.forearm * 0.05, rx: r.fore * 2.0, rz: r.fore * 1.9, x: ex, z: -0.006, w: F, c: shade(sh.colour, 0.85) },
       ], 10, { capTop: null, capBottom: null }));
     }
-    // hand: a mitten with a thumb
+    // hand: a flat palm, the fingers curled a little toward the thigh, and a thumb in front
     const hc = plate && look.armPlate ? plateCol : skin;
-    M.add(blob(ex, wristY - p.hand * 0.45, 0.004, r.wrist * 1.15, p.hand * 0.55, r.wrist * 1.45, { w: 8, h: 6 }), hc, Hd);
-    M.add(blob(ex + s * -0.004, wristY - p.hand * 0.35, 0.004 + r.wrist * 1.2, r.wrist * 0.5, p.hand * 0.32, r.wrist * 0.5, { w: 6, h: 4, rot: [0.4, 0, 0] }), hc, Hd);
+    M.add(blob(ex, wristY - p.hand * 0.3, 0.003, r.wrist * 0.92, p.hand * 0.38, r.wrist * 1.5, { w: 10, h: 6 }), hc, Hd);
+    M.add(blob(ex - s * r.wrist * 0.22, wristY - p.hand * 0.72, 0.001, r.wrist * 0.82, p.hand * 0.34, r.wrist * 1.38, { w: 10, h: 6, rot: [0, 0, s * 0.3] }), shade(hc, 0.96), Hd);
+    M.add(blob(ex - s * r.wrist * 0.15, wristY - p.hand * 0.36, 0.003 + r.wrist * 1.32, r.wrist * 0.42, p.hand * 0.3, r.wrist * 0.42, { w: 6, h: 5, rot: [0.35, 0, s * 0.35] }), hc, Hd);
   }
 
   // ----- legs -----
@@ -980,7 +1048,7 @@ function buildBody(look) {
     const g = greaves ? 1.12 : 1;
     const bootR = feetCutv === 'boots' || feetCutv === 'rim' || feetCutv === 'fold' || feetCutv === 'plate' ? 1.18 : 1;
     let rings = [
-      { y: J.y + 0.035, rx: r.thigh * 0.92, rz: r.thigh * 0.95, x: J.x * 0.9, w: [[Th, 0.55], ['hips', 0.45]] },
+      { y: J.y + 0.04, rx: r.thigh * 1.04, rz: r.thigh * 1.0, x: J.x * 0.84, w: [[Th, 0.55], ['hips', 0.45]] },
       { y: J.y - p.thigh * 0.15, rx: r.thigh * loose * g, rz: r.thigh * loose * g, x: J.x, w: Th },
       { y: J.y - p.thigh * 0.72, rx: lerp(r.thigh, r.knee, 0.65) * loose * g, rz: lerp(r.thigh, r.knee, 0.65) * loose * g, x: lerp(J.x, kx, 0.72), w: Th },
       { y: kneeY, rx: r.knee * (loose * 0.6 + 0.4) * g, rz: r.knee * 1.05 * (loose * 0.6 + 0.4) * g, x: kx, w: [[Th, 0.5], [Sh, 0.5]] },
@@ -990,6 +1058,13 @@ function buildBody(look) {
     ];
     rings = refine(rings, [bootTop, bootTop - p.shin * 0.08, legEnd, ankY + p.shin * 0.12, kneeY + p.thigh * 0.2]);
     M.add(loft(rings, 10, { capTop: null, capBottom: 0.2, colourOf: (a, y) => legColour(a, y) }));
+    if (feetCutv === 'boots' || feetCutv === 'plate') {
+      const [br, bz] = radiusAt(rings, bootTop), bc = feetCutv === 'plate' ? sheen(bootCol, 0.7) : shade(bootCol, 1.1);
+      M.add(loft([
+        { y: bootTop + p.H * 0.006, rx: br * 1.1, rz: bz * 1.1, x: lerp(kx, ax, 0.35), w: Sh, c: bc },
+        { y: bootTop - p.H * 0.01, rx: br * 1.06, rz: bz * 1.06, x: lerp(kx, ax, 0.42), w: Sh, c: shade(bootCol, 0.85) },
+      ], 10, { capTop: null, capBottom: null }));
+    }
     if (cut === 'puffy' && bootTop < kneeY - p.shin * 0.62) {
       // gathered cuff below the knee
       M.add(loft([
@@ -1067,7 +1142,7 @@ function buildBody(look) {
   if (mail && mail.kind === 'heavy') {
     for (const [s, side] of [[1, 'L'], [-1, 'R']]) {
       const J = Bp['arm' + side];
-      M.add(blob(J.x + s * 0.01, J.y + 0.012, J.z, r.arm * 1.9, r.arm * 1.15, r.arm * 1.8, { w: 10, h: 6, rot: [0, 0, s * -0.35] }), mix(mail.metal, '#ffffff', 0.1), [['arm' + side, 0.55], ['clav' + side, 0.45]]);
+      M.add(blob(J.x + s * 0.006, J.y + 0.01, J.z, r.arm * 1.5, r.arm * 0.95, r.arm * 1.45, { w: 12, h: 6, rot: [0, 0, s * -0.35] }), mix(mail.metal, '#ffffff', 0.1), [['arm' + side, 0.55], ['clav' + side, 0.45]]);
     }
   } else if (mail && mail.kind === 'light') {
     for (const [s, side] of [[1, 'L'], [-1, 'R']]) {
@@ -1091,6 +1166,19 @@ function buildBody(look) {
     Cc.setXYZ(i, Cc.getX(i) * k, Cc.getY(i) * k, Cc.getZ(i) * k);
   }
   return { geo, bind: Bp };
+}
+
+/** [rx, rz] of a ring list at height y, interpolated (rings sorted by y in either direction). */
+function radiusAt(rings, y) {
+  for (let i = 0; i < rings.length - 1; i++) {
+    const a = rings[i], b = rings[i + 1];
+    if ((y - a.y) * (y - b.y) <= 0 && a.y !== b.y) {
+      const t = (y - a.y) / (b.y - a.y);
+      return [lerp(a.rx, b.rx, t), lerp(a.rz, b.rz, t)];
+    }
+  }
+  const e = Math.abs(y - rings[0].y) < Math.abs(y - rings[rings.length - 1].y) ? rings[0] : rings[rings.length - 1];
+  return [e.rx, e.rz];
 }
 
 /**
@@ -1143,8 +1231,8 @@ function buildHead(M, look, Bp) {
     const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
     const q = surf(x, y, z);
     P.setXYZ(i, q.x, q.y, q.z);
-    let c = colour(skin);
-    if (hd.kind === 'skull' && z > 0.55 && Math.abs(y - 0.08) < 0.18 && Math.abs(Math.abs(x) - 0.33) < 0.18) c = colour(DARK);
+    let c = skin;
+    if (hd.kind === 'skull' && z > 0.55 && Math.abs(y - 0.08) < 0.18 && Math.abs(Math.abs(x) - 0.33) < 0.18) c = DARK;
     else if (z > 0.75 && Math.abs(x) < 0.32 && y < -0.42 && y > -0.56 && !hd.muzzle) c = shade(skin, 0.72);      // mouth
     else if (stubble && y < -0.15 && z > -0.1) c = mix(skin, stubble, 0.35);
     cols.push(c);
@@ -1339,21 +1427,25 @@ function buildHair(M, look, Bp, surf, toModel, capped = false, onlyLong = false)
   const seed = look.seed;
   const cap = Math.min(h.vol * 0.8, capped ? 0.04 : 9);
   if (!onlyLong) {
-    const g = new T.SphereGeometry(1, 26, 18);
+    const g = new T.SphereGeometry(1, 32, 22);
     const P = g.getAttribute('position'), keep = new Uint8Array(P.count);
     const cols = [];
+    // locks along the cut edge: a triangle wave of 9 teeth, +-0.09 rad, phase from the seed
+    const locks = cap > 0.06 && !h.flat ? 1 : 0, nz = h.noise || (cap > 0.06 ? 0.1 : 0);
     for (let i = 0; i < P.count; i++) {
       const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
       const a = Math.atan2(x, z), e = Math.asin(clamp(y, -1, 1));
       let line = hl(a);
+      const tooth = ((a / TAU * 9 + (seed % 11) / 11) % 1 + 1) % 1;
+      line += locks * 0.18 * (Math.abs(tooth * 2 - 1) - 0.5);
       if (h.swoop && Math.cos(a) > 0) line += h.swoop * 0.12 * Math.sin(a);
       if (h.part && Math.cos(a) > 0.2) line -= 0.12 * (1 - Math.abs(Math.sin(a)) * 3);
       if (capped) line = Math.max(line, 0.05);
       const bald = h.bald && e > h.bald && Math.cos(a) > -0.4;
-      keep[i] = (e > line - 0.08 && !bald) ? 1 : 0;
-      const f = sstep(line - 0.08, line + 0.3, e);
+      keep[i] = (e > line - 0.05 && !bald) ? 1 : 0;
+      const f = sstep(line - 0.05, line + 0.16, e);
       let v = cap * f;
-      if (h.noise) v += h.noise * f * (noise3(x * (h.nscale || 4) + seed % 13, y * (h.nscale || 4), z * (h.nscale || 4)) - 0.35) * Math.max(0.12, cap) * 1.6;
+      if (nz) v += nz * f * (noise3(x * (h.nscale || 4) + seed % 13, y * (h.nscale || 4), z * (h.nscale || 4)) - 0.35) * Math.max(0.12, cap) * 1.6;
       if (h.flare && y < 0) v += h.flare * f * (-y) * 0.6;
       if (h.swoop && Math.cos(a) > 0 && y > 0.2) v += 0.06 * h.swoop * Math.max(0, Math.sin(a)) * f;
       if (h.tuft && z < -0.2 && y > 0.6) v += h.tuft * sstep(0.6, 1, y) * sstep(-0.2, -0.6, z);
@@ -1363,7 +1455,7 @@ function buildHair(M, look, Bp, surf, toModel, capped = false, onlyLong = false)
       if (h.flat && q.y > 1.02) q.y = 1.02 + (q.y - 1.02) * 0.2;
       const m = toModel(q.x, q.y, q.z);
       P.setXYZ(i, m.x, m.y, m.z);
-      let c = colour(col).clone().multiplyScalar(0.78 + 0.32 * (y * 0.5 + 0.5));
+      let c = shade(col, 0.78 + 0.32 * (y * 0.5 + 0.5));
       if (h.stripes && Math.floor((a + Math.PI) / TAU * h.stripes * 2) % 2) c.multiplyScalar(0.55);
       cols.push(c);
     }
@@ -1518,7 +1610,7 @@ function buildHelm(M, look, Bp, surf, toModel) {
     const P = g.getAttribute('position'), keep = new Uint8Array(P.count);
     for (let i = 0; i < P.count; i++) {
       const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
-      keep[i] = !(z > 0.35 && Math.abs(x) < 0.62 && y < 0.5 && y > -0.75) && y > -0.85 ? 1 : 0;
+      keep[i] = !(z > 0.2 && (x / 0.66) ** 2 + ((y + 0.12) / 0.66) ** 2 < 1) && y > -0.85 ? 1 : 0;
       const s = headShape(look.head, x, y, z);
       const v = 0.2 + (z < 0 ? 0.06 : 0);
       const q = toModel(s[0] * (1 + v), s[1] * (1 + v) + (y > 0.6 ? 0.05 : 0), s[2] * (1 + v));
@@ -1531,8 +1623,8 @@ function buildHelm(M, look, Bp, surf, toModel) {
     M.add(g, h.leather, 'head');
     M.add(loft([
       { y: Bp.head.y + p.headH * 0.15, rx: p.headW * 0.55, rz: p.headD * 0.55, z: C.z - 0.01, w: 'head', c: h.leather },
-      { y: Bp.neck.y - 0.005, rx: p.chestW * 0.95, rz: p.chestD * 1.0, z: Bp.chest.z, w: [['chest', 0.7], ['neck', 0.3]], c: shade(h.leather, 0.9) },
-      { y: Bp.neck.y - p.chest * 0.18, rx: p.chestW * 1.1, rz: p.chestD * 1.12, z: Bp.chest.z, w: 'chest', c: shade(h.leather, 0.8) },
+      { y: Bp.neck.y - 0.005, rx: p.chestW * 0.8, rz: p.chestD * 0.95, z: Bp.chest.z, w: [['chest', 0.7], ['neck', 0.3]], c: shade(h.leather, 0.9) },
+      { y: Bp.neck.y - p.chest * 0.16, rx: p.chestW * 1.02, rz: p.chestD * 1.08, z: Bp.chest.z, w: 'chest', c: shade(h.leather, 0.8) },
     ], 16, { capTop: null, capBottom: null }));
   } else if (h.kind === 'medium') {
     const g = new T.SphereGeometry(1, 20, 12, 0, TAU, 0, Math.PI * 0.55);
@@ -1575,12 +1667,12 @@ function buildVisor(M, look, surf, toModel) {
     const s = headShape(look.head, x, y, z);
     const q = toModel(s[0] * 1.14, s[1] * 1.14, s[2] * 1.14 + (v.kind.startsWith('pig') && z > 0.7 && y < 0 && y > -0.6 ? 0.25 : 0));
     P.setXYZ(i, q.x, q.y, q.z);
-    let c = colour(v.metal);
+    let c = v.metal;
     const front = z > 0.55;
-    if (front && /slit/.test(v.kind) && Math.abs(y - 0.08) < (v.kind.includes('narrow') ? 0.05 : 0.09)) c = colour(DARK);
-    if (front && /grated/.test(v.kind) && y < 0.15 && y > -0.6 && Math.floor((x + 1) * 9) % 2) c = colour(DARK);
-    if (front && /round/.test(v.kind) && (x * x + (y - 0.05) * (y - 0.05)) < 0.12) c = colour('#79c8ff');
-    if (front && /pig|horned/.test(v.kind) && Math.abs(y - 0.12) < 0.07 && Math.abs(x) < 0.55) c = colour(DARK);
+    if (front && /slit/.test(v.kind) && Math.abs(y - 0.08) < (v.kind.includes('narrow') ? 0.05 : 0.09)) c = DARK;
+    if (front && /grated/.test(v.kind) && y < 0.15 && y > -0.6 && Math.floor((x + 1) * 9) % 2) c = DARK;
+    if (front && /round/.test(v.kind) && (x * x + (y - 0.05) * (y - 0.05)) < 0.12) c = '#79c8ff';
+    if (front && /pig|horned/.test(v.kind) && Math.abs(y - 0.12) < 0.07 && Math.abs(x) < 0.55) c = DARK;
     cols.push(c);
   }
   smoothNormals(g);
@@ -1668,6 +1760,14 @@ function buildParts(M, look, Bp) {
 // ---------- props (non-skinned, in grip space: the shaft runs along +y from the fist) ----------
 
 function propGeometry(kind, q, k, opts = {}) {
+  const prev = SURFS, metal = metalOf(q);
+  SURFS = new Map([[metal.toLowerCase(), SURF.metal], ['#8a8c90', SURF.metal], ['#6a6c72', SURF.metal], ['#d6a83a', SURF.metal],
+    ['#7a5232', SURF.leather], ['#4e3420', SURF.leather], ['#3a2618', SURF.leather], ['#c9a06a', SURF.leather], ['#9a7244', SURF.leather], ['#8a2a24', SURF.leather], ['#b08a5a', SURF.leather],
+    ['#9fdcff', SURF.gloss], ['#62b6ff', SURF.gloss], ['#f4fbff', SURF.gloss], ['#6ad48a', SURF.gloss], ['#7ad4ff', SURF.gloss], ['#c8a060', SURF.gloss], ['#d8e6e8', SURF.gloss]]);
+  try { return propGeometryRaw(kind, q, k, opts); } finally { SURFS = prev; }
+}
+
+function propGeometryRaw(kind, q, k, opts = {}) {
   const T = E(), V = T.Vector3, parts = [];
   const add = (geo, c) => parts.push(paint(geo, c, 'root'));
   const box = (w, h, d, x, y, z, c, rx = 0) => { const g = new T.BoxGeometry(w, h, d); if (rx) g.rotateX(rx); g.translate(x, y, z); add(g, c); };
@@ -1851,6 +1951,98 @@ const OUTLINE_FS = `
     #include <colorspace_fragment>
   }`;
 
+// Toon ramp for the direct light, indexed by dotNL * 0.5 + 0.5: three soft bands at 0.26 (turned
+// away), 0.64 and 1.0 (facing the sun), with 0.08-wide transitions. Linear filtering over 32 texels.
+let RAMP = null;
+function toonRamp() {
+  if (RAMP) return RAMP;
+  const T = E(), N = 32, d = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const x = (i + 0.5) / N;
+    d[i] = Math.round(255 * (0.26 + 0.38 * sstep(0.44, 0.52, x) + 0.36 * sstep(0.64, 0.72, x)));
+  }
+  RAMP = new T.DataTexture(d, N, 1, T.RedFormat);
+  RAMP.minFilter = RAMP.magFilter = T.LinearFilter;
+  RAMP.generateMipmaps = false;
+  RAMP.needsUpdate = true;
+  return RAMP;
+}
+
+// Per-surface shading added to the toon light, in view space so highlights sit at the same place
+// on screen whatever the figure's heading (a fixed key light above-left of the camera, KEY).
+//   metal   diffuse x0.75, highlight pow 30 x1.0 + pow 6 x0.25, rim x2
+//   chain   ring pattern on the bind-pose position (rows offset by half a ring), faded out by
+//           fwidth when a ring is under ~3 px, highlight pow 14 x0.5
+//   hair    streaks around the head's vertical axis (30 per turn, x0.8..1.0, faded by fwidth), and a
+//           highlight band (smoothstep 0.8..0.96 of N.KEY) x0.2
+//   gloss   pow 50 x0.7 (eyes, tusks, crystals)
+//   leather pow 10 x0.12
+//   skin    pow 12 x0.05, plus a warm floor of 8% of the albedo in red, 3% green
+//   all     rim = (1 - N.V)^3, sky-tinted, x0.3
+const STYLE_VS = 'attribute float surf;\nvarying float vSurf;\nvarying vec3 vBind;';
+const STYLE_COLOUR = `
+  float fMetal = 1.0 - step(0.5, abs(vSurf - 3.0));
+  float fChain = 1.0 - step(0.5, abs(vSurf - 6.0));
+  float fHair = 1.0 - step(0.5, abs(vSurf - 2.0));
+  float fGloss = 1.0 - step(0.5, abs(vSurf - 5.0));
+  float fLeather = 1.0 - step(0.5, abs(vSurf - 4.0));
+  float fSkin = 1.0 - step(0.5, abs(vSurf - 1.0));
+  vec3 fAlbedo = diffuseColor.rgb;
+  if (fChain > 0.5) {
+    vec2 cq = vec2((vBind.x + vBind.z) * 150.0, vBind.y * 150.0);
+    cq.x += 0.5 * mod(floor(cq.y), 2.0);
+    float cd = length(fract(cq) - 0.5);
+    float ring = smoothstep(0.16, 0.24, cd) * (1.0 - smoothstep(0.38, 0.47, cd));
+    float fade = 1.0 - smoothstep(0.25, 0.45, fwidth(cq.y));
+    diffuseColor.rgb *= mix(0.82, mix(0.45, 1.2, ring), fade);
+  }
+  if (fHair > 0.5) {
+    float ha = atan(vBind.x, vBind.z + 0.01) * 30.0 + sin(vBind.y * 60.0) * 0.9;
+    float hf = 1.0 - smoothstep(0.35, 0.7, fwidth(ha));
+    diffuseColor.rgb *= mix(1.0, 0.8 + 0.2 * sin(ha), hf);
+  }
+  diffuseColor.rgb *= mix(1.0, 0.75, fMetal);`;
+const STYLE_LIGHT = `
+  {
+    vec3 nV = normalize(normal);
+    float ndv = clamp(dot(nV, normalize(vViewPosition)), 0.0, 1.0);
+    float nh = max(dot(nV, normalize(vec3(-0.4, 0.62, 0.68))), 0.0);
+    float spec = fMetal * (pow(nh, 30.0) + 0.25 * pow(nh, 6.0))
+      + fChain * 0.5 * pow(nh, 14.0)
+      + fHair * 0.2 * smoothstep(0.8, 0.96, nh)
+      + fGloss * 0.7 * pow(nh, 50.0)
+      + fLeather * 0.12 * pow(nh, 10.0)
+      + fSkin * 0.05 * pow(nh, 12.0);
+    outgoingLight += spec * mix(vec3(1.0), fAlbedo * 1.6 + 0.2, fMetal * 0.6);
+    outgoingLight += fSkin * fAlbedo * vec3(0.08, 0.03, 0.0);
+    outgoingLight += pow(1.0 - ndv, 3.0) * (0.3 + 0.6 * fMetal) * vec3(0.55, 0.62, 0.75);
+  }`;
+
+/** The figure look on top of a MeshToonMaterial: surface highlights, chain rings, rim light. */
+function stylize(mat) {
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, r) => {
+    if (prev) prev(sh, r);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + STYLE_VS)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSurf = surf;\nvBind = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vSurf;\nvarying vec3 vBind;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\n' + STYLE_COLOUR)
+      .replace('#include <opaque_fragment>', STYLE_LIGHT + '\n#include <opaque_fragment>');
+  };
+  return mat;
+}
+
+/** Body and prop material: toon ramp, the caller's patch (fog of war), dissolve, then stylize. */
+function figureMaterial(opts, dissolve) {
+  const T = E();
+  let m = new T.MeshToonMaterial({ vertexColors: true, gradientMap: toonRamp() });
+  if (opts.patch) m = opts.patch(m) || m;
+  withDissolve(m, dissolve);
+  return stylize(m);
+}
+
 /** Adds a per-material dither dissolve (uDissolve, 0..1) after any patch the caller applied. */
 function withDissolve(mat, u) {
   const prev = mat.onBeforeCompile;
@@ -1885,9 +2077,7 @@ function create(ch, opts = {}) {
   const { geo, bind } = buildBody(look);
   const S = shared();
   const dissolve = { value: 0 };
-  let mat = new T.MeshLambertMaterial({ vertexColors: true });
-  if (opts.patch) mat = opts.patch(mat) || mat;
-  withDissolve(mat, dissolve);
+  const mat = figureMaterial(opts, dissolve);
 
   const bones = BONES.map(() => new T.Bone());
   BONES.forEach((n, i) => {
@@ -1921,9 +2111,7 @@ function create(ch, opts = {}) {
 
   // props
   const k = look.p.H / 1.12;
-  let pmat = new T.MeshLambertMaterial({ vertexColors: true });
-  if (opts.patch) pmat = opts.patch(pmat) || pmat;
-  withDissolve(pmat, dissolve);
+  const pmat = figureMaterial(opts, dissolve);
   const propCache = new Map();
   const prop = (kind, q, o) => {
     const key = kind + ':' + q;

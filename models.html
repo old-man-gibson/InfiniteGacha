@@ -57,6 +57,8 @@ const Q = new URLSearchParams(location.search);
 if (Q.get('seed')) {
   let a = +Q.get('seed') >>> 0;
   Math.random = () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  // stats.js rolls through rng.js (crypto) by default: route it through the same seed
+  if (typeof Rng !== 'undefined') Rng.rand = () => Math.random();
 }
 const MODES = ['idle', 'walk', 'run', 'work', 'fight', 'talk', 'sit', 'fall'];
 const JOBS = ['mixed', 'mining', 'farming', 'foraging', 'smithing', 'alchemy', 'cooking', 'maintenance', 'building', 'training'];
