@@ -13,7 +13,8 @@
 //
 // Raster rules: a finished building is a ring of WALL tiles round FLOOR, with one DOOR on its
 // square-facing side. A construction site is open FLOOR, so builders can stand anywhere on it.
-// Roads are ROAD. The crystal and the fountain are WALL. Everything else is FLOOR.
+// Roads are ROAD. The crystal, the fountain and the pond are WALL, and so is everything within
+// RIM tiles of the island's edge and beyond it: nobody walks off the island. Everything else is FLOOR.
 // The map is rebuilt only when `signature` changes.
 
 (() => {
@@ -26,7 +27,8 @@ const T = MG.T;
 const BL = () => (typeof BaseLayout !== 'undefined') ? BaseLayout : require('./baselayout.js');
 const SQUARE_R = 5;
 const FOUNTAIN_R = 1.6;    // tiles round the square's centre nobody stands on
-const EDGE = 6;            // tiles of open ground past the layout's built-up box
+const EDGE = 2;            // tiles past the island's box (lay.bounds), all of it beyond the rim
+const RIM = 0.8;           // tiles inside the island's edge that are still wall
 
 // Footprints. A building's plot grows with its tier, which is the only way the town ever looks
 // bigger: an Abyssal Mine is a hole you can see from the road and a Quarry is a scrape.
@@ -141,6 +143,13 @@ function build(state) {
       if (f > 0 && (at(tx + 1, ty) < f || at(tx - 1, ty) < f || at(tx, ty + 1) < f || at(tx, ty - 1) < f)) g.set(tx, ty, T.WALL);
     }
     for (const pz of lay.plazas) disc(pz.x, pz.z, pz.r, T.ROAD);
+  }
+
+  // the island's edge and the pond
+  if (lay.pond) disc(lay.pond.x, lay.pond.z, lay.pond.r + 0.3, T.WALL);
+  for (let ty = 0; ty < h; ty++) for (let tx = 0; tx < w; tx++) {
+    const c = centreOf(tx, ty);
+    if (BL().islandSdf(lay, c.x, c.z) < RIM) g.set(tx, ty, T.WALL);
   }
 
   const plots = {}, zones = {};
