@@ -222,7 +222,8 @@ function headKind(id, bt) {
 // front, side and back; eye level is about 0.05, the brow 0.25, an ear top 0.15, the nape -0.5.
 // vol: how far the hair stands off the skull as a fraction of head radius. Optional pieces:
 // long (length below the chin as a fraction of H), tail {at, len, braid}, bun, pigtails, spikes,
-// hawk, locks, strand, flat, bald, noise, flare, swoop, tuft, stripes, hive.
+// hawk, locks, strand, flat, bald, noise, flare, swoop, tuft, stripes, hive, fringe (spikes on the
+// forehead only).
 function hairStyle(id) {
   const n = id.split('/').pop().replace(/^hair_/, '');
   const S = (front, side, back, vol, o = {}) => Object.assign({ front, side, back, vol }, o);
@@ -266,7 +267,7 @@ function hairStyle(id) {
   if (m(/^mop/)) return S(0.15, -0.18, -0.55, 0.17, { noise: 0.15 });
   if (m(/^cowlick/)) return S(0.45, 0.05, -0.45, 0.11, { tuft: m(/tall/) ? 0.5 : 0.3 });
   if (m(/^curtains/)) return S(0.3, -0.12, -0.5, 0.13, { part: true });
-  if (m(/^idol/)) return S(0.22, -0.05, -0.5, 0.14, { spikes: 6, spikeLen: 0.22, front: true });
+  if (m(/^idol/)) return S(0.22, -0.05, -0.5, 0.14, { spikes: 6, spikeLen: 0.22, fringe: true });
   if (m(/^page/)) return S(0.15, -0.3, -0.5, 0.15);
   if (m(/^pixie/)) return S(0.3, 0.05, -0.4, 0.09, { swoop: 0.4 });
   if (m(/^swoop|side_bangs/)) return S(0.3, 0.05, -0.45, 0.12, { swoop: 1 });
@@ -522,16 +523,17 @@ class Mesher {
   add(geo, colour = null, weights = null) {
     if (colour != null || weights != null) paint(geo, colour, weights);
     if (!geo.getAttribute('normal')) geo.computeVertexNormals();
-    this.parts.push(geo.index ? geo.toNonIndexed() : geo);
+    this.parts.push(geo);
     return geo;
   }
+  /** One indexed geometry: vertices copied once, each part's indices offset by the vertices before it. */
   build() {
     const T = E();
-    let n = 0;
-    for (const g of this.parts) n += g.getAttribute('position').count;
+    let n = 0, m = 0;
+    for (const g of this.parts) { const c = g.getAttribute('position').count; n += c; m += g.index ? g.index.count : c; }
     const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
-    const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), sf = new Float32Array(n);
-    let o = 0;
+    const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), sf = new Float32Array(n), idx = new Uint32Array(m);
+    let o = 0, j = 0;
     for (const g of this.parts) {
       const c = g.getAttribute('position').count;
       pos.set(g.getAttribute('position').array, o * 3);
@@ -540,6 +542,8 @@ class Mesher {
       if (g.getAttribute('surf')) sf.set(g.getAttribute('surf').array, o);
       si.set(g.getAttribute('skinIndex').array, o * 4);
       sw.set(g.getAttribute('skinWeight').array, o * 4);
+      if (g.index) { const ix = g.index.array; for (let k = 0; k < ix.length; k++) idx[j++] = ix[k] + o; }
+      else for (let k = 0; k < c; k++) idx[j++] = k + o;
       o += c;
       g.dispose();
     }
@@ -550,6 +554,7 @@ class Mesher {
     geo.setAttribute('skinIndex', new T.BufferAttribute(si, 4));
     geo.setAttribute('skinWeight', new T.BufferAttribute(sw, 4));
     geo.setAttribute('surf', new T.BufferAttribute(sf, 1));
+    geo.setIndex(new T.BufferAttribute(idx, 1));
     geo.computeBoundingSphere();
     return geo;
   }
@@ -897,16 +902,17 @@ function buildBodyRaw(look) {
   const legCol = lg ? (lg.cut === 'plate' ? lg.colour : lg.colour) : skin;
   const belt = shade(sh ? sh.colour : legCol, 0.45);
   const mailCol = mail ? (mail.kind === 'light' ? mail.leather : mail.metal) : null;
+  // neckline depths: a scoop is one band; a V is two steps, narrow and deep, wide and shallow
+  const neckScoop = neckY - 0.005 - p.chest * 0.24, neckV1 = neckY - 0.005 - p.chest * 0.38, neckV2 = neckY - 0.005 - p.chest * 0.2;
   const torsoColour = (a, y) => {
     const front = Math.cos(a), sideAbs = Math.abs(Math.sin(a));
     // neckline cut-outs
     if (sh && !mailCol && front > 0) {
-      const topY = neckY - 0.005;
-      if (sh.neck === 'v' && y > topY - p.chest * (0.45 - sideAbs * 1.2)) return skin;
-      if (sh.neck === 'scoop' && y > topY - p.chest * (0.3 - sideAbs * 0.5) && front > 0.4) return skin;
+      if (sh.neck === 'v' && ((y > neckV1 && sideAbs < 0.13) || (y > neckV2 && sideAbs < 0.3))) return skin;
+      if (sh.neck === 'scoop' && y > neckScoop && front > 0.35) return skin;
     }
     if (mailCol && y > waistY - p.waist * 0.2 && y < neckY + 0.01) {
-      if (mail.kind === 'light' && front > 0.85 && Math.abs(y - chestY - p.chest * 0.45) < p.chest * 0.25 && (Math.round(y * 160) % 3 === 0)) return mail.metal;
+      if (mail.kind === 'light' && front > 0.97) return shade(mailCol, 0.7);          // the lacing seam down the front
       if (mail.kind === 'medium') return mix(mailCol, '#ffffff', (hash3(Math.round(a * 20), Math.round(y * 300), 3) - 0.5) * 0.25 + 0.0);
       if (mail.kind === 'heavy') return Math.abs(y - (chestY - p.waist * 0.15)) < p.waist * 0.06 ? shade(mailCol, 0.6) : sheen(mailCol, a);
       return mailCol;
@@ -928,7 +934,7 @@ function buildBodyRaw(look) {
   const bulk = mail && mail.kind === 'heavy' ? 1.1 : mail ? 1.05 : 1;
   const belly = p.belly;
   const bustF = p.bust ? 1 + 0.32 * p.bust : 1;
-  const hemYs = [waistY - p.waist * 0.07, waistY + p.waist * 0.07, shirtBottom];
+  const hemYs = [waistY - p.waist * 0.07, waistY + p.waist * 0.07, shirtBottom].concat(sh && !mailCol ? (sh.neck === 'v' ? [neckV1, neckV2] : sh.neck === 'scoop' ? [neckScoop] : []) : []);
   const shoulderTop = Math.min(p.chestW * 1.02, p.shoulder - r.arm * 0.3);
   const pecF = 1 + p.pec, pecChest = Math.max(bustF, pecF);
   let torso = [
@@ -1149,6 +1155,11 @@ function buildBodyRaw(look) {
       const J = Bp['arm' + side];
       M.add(blob(J.x, J.y + 0.008, J.z, r.arm * 1.45, r.arm * 0.9, r.arm * 1.4, { w: 8, h: 5, rot: [0, 0, s * -0.3] }), shade(mail.leather, 0.85), [['arm' + side, 0.5], ['clav' + side, 0.5]]);
     }
+    // three buckles in the quality's metal down the front seam
+    for (const k of [0.15, 0.42, 0.69]) {
+      const y = chestY + p.chest * k, [, d] = radiusAt(torso, y), front = Bp.chest.z + d * lerp(1, pecChest, k > 0.3 ? 1 : 0.3) * 1.04;
+      M.add(blob(0, y, front, p.chestW * 0.12, p.chest * 0.05, p.chestD * 0.06, { w: 8, h: 4 }), mail.metal, k > 0.3 ? 'chest' : [['spine', 0.5], ['chest', 0.5]]);
+    }
   }
   if (sh && sh.neck === 'polo') {
     M.add(loft([
@@ -1233,42 +1244,91 @@ function buildHead(M, look, Bp) {
     P.setXYZ(i, q.x, q.y, q.z);
     let c = skin;
     if (hd.kind === 'skull' && z > 0.55 && Math.abs(y - 0.08) < 0.18 && Math.abs(Math.abs(x) - 0.33) < 0.18) c = DARK;
-    else if (z > 0.75 && Math.abs(x) < 0.32 && y < -0.42 && y > -0.56 && !hd.muzzle) c = shade(skin, 0.72);      // mouth
-    else if (stubble && y < -0.15 && z > -0.1) c = mix(skin, stubble, 0.35);
+    else if (stubble && y < -0.3 + 0.2 * sstep(0.85, 0.25, z) && z > -0.1) c = mix(skin, stubble, 0.35);
+    else if (!hd.muzzle && hd.kind !== 'skull' && z > 0.4) {
+      const blush = Math.exp(-((Math.abs(x) - 0.42) ** 2 + (y + 0.24) ** 2) / 0.025);
+      if (blush > 0.05) c = mix(skin, '#e0706a', 0.16 * blush);
+    }
     cols.push(c);
   }
   smoothNormals(g);
   M.add(g, (x, y, z, i) => cols[i], 'head');
 
   if (!closed) {
-    // eyes on their own bone so they can blink
-    const eyeY = hd.kind === 'lizard' ? 0.12 : hd.kind === 'goblin' ? 0.02 : 0.05;
-    const eyeX = hd.kind === 'lizard' ? 0.5 : hd.kind === 'alien' ? 0.38 : 0.33;
-    const big = hd.kind === 'alien' ? 2.1 : hd.kind === 'goblin' ? 1.25 : hd.kind === 'mouse' || hd.kind === 'rabbit' ? 1.15 : 1;
+    // A point on the head surface for head-unit (x, y) on the front, pushed out along the radius.
+    const onFace = (xu, yu, lift = 0) => {
+      const q = surf(xu, yu, Math.sqrt(Math.max(0, 1 - xu * xu - yu * yu)));
+      return q.addScaledVector(new V().subVectors(q, C).normalize(), lift);
+    };
+    const nerve = look.axes ? look.axes.nerve : 0;
+    // eyes on their own bone so they can blink: white, iris, pupil, catchlight, and the upper lid
+    // line, which is what makes a small eye read at a distance
+    const eyeY = hd.kind === 'lizard' ? 0.12 : hd.kind === 'goblin' ? 0.04 : 0.0;
+    const eyeX = hd.kind === 'lizard' ? 0.5 : hd.kind === 'alien' ? 0.38 : 0.31;
+    const big = hd.kind === 'alien' ? 1.9 : hd.kind === 'goblin' ? 1.2 : hd.kind === 'mouse' || hd.kind === 'rabbit' ? 1.1 : 1;
+    const er = p.headW * 0.088 * big;
     for (const s of [1, -1]) {
-      const zs = Math.sqrt(Math.max(0, 1 - eyeX * eyeX - eyeY * eyeY));
-      const e = surf(s * eyeX, eyeY, zs);
-      const er = p.headW * 0.075 * big;
+      const e = onFace(s * eyeX, eyeY, -er * 0.22), n = new V().subVectors(e, C).normalize();
+      const at = (k, dx = 0, dy = 0) => e.clone().addScaledVector(n, er * k).add(new V(s * dx * er, dy * er, 0));
       if (hd.kind === 'alien') {
-        M.add(blob(e.x, e.y, e.z - er * 0.2, er * 1.1, er * 0.75, er * 0.5, { w: 10, h: 6, rot: [0, 0, s * 0.5] }), '#0c0a12', 'eyes');
-      } else if (hd.kind !== 'skull') {
-        M.add(blob(e.x, e.y, e.z - er * 0.35, er, er * 0.68, er * 0.45, { w: 8, h: 6 }), hd.kind === 'lizard' ? '#d6c24a' : '#efece6', 'eyes');
-        M.add(blob(e.x + s * er * 0.05, e.y - er * 0.02, e.z - er * 0.02, er * 0.55, er * 0.6, er * 0.3, { w: 8, h: 6 }), hd.kind === 'lizard' ? '#1c140c' : look.eye, 'eyes');
-        // brow
-        if (!hd.muzzle && hd.kind !== 'lizard') {
-          const bc = hairC ? shade(hairC, 0.85) : shade(skin, 0.7);
-          const b = surf(s * eyeX * 1.02, eyeY + 0.2, Math.sqrt(Math.max(0, 1 - eyeX * eyeX - 0.07)));
-          M.add(blob(b.x, b.y, b.z, er * 1.25, er * (0.22 + hd.brow * 0.12), er * 0.35, { w: 6, h: 4, rot: [0, 0, s * (0.12 - (look.seed % 7) * 0.03)] }), bc, 'head');
+        M.add(blob(e.x, e.y, e.z, er * 1.1, er * 0.72, er * 0.5, { w: 12, h: 8, rot: [0, 0, s * 0.5] }), '#0c0a12', 'eyes');
+        const c = at(0.42, 0.3, 0.25);
+        M.add(blob(c.x, c.y, c.z, er * 0.14, er * 0.14, er * 0.08, { w: 6, h: 4 }), '#f4f0e6', 'eyes');
+        continue;
+      }
+      if (hd.kind === 'skull') continue;
+      const lizard = hd.kind === 'lizard';
+      M.add(blob(e.x, e.y, e.z, er, er * 0.64, er * 0.42, { w: 12, h: 8 }), lizard ? '#d6c24a' : '#efece6', 'eyes');
+      const iris = at(0.24, 0.04, 0.04);
+      M.add(blob(iris.x, iris.y, iris.z, er * (lizard ? 0.2 : 0.5), er * 0.56, er * 0.24, { w: 10, h: 8 }), lizard ? '#1c140c' : look.eye, 'eyes');
+      if (!lizard) {
+        const pu = at(0.36, 0.04, 0.04);
+        M.add(blob(pu.x, pu.y, pu.z, er * 0.23, er * 0.25, er * 0.12, { w: 8, h: 6 }), '#0c0a12', 'eyes');
+      }
+      const cl = at(0.44, 0.22, 0.24);
+      M.add(blob(cl.x, cl.y, cl.z, er * 0.09, er * 0.09, er * 0.05, { w: 6, h: 4 }), '#f4f0e6', 'eyes');
+      if (!hd.muzzle) {
+        // upper lid line from the inner to the outer corner; female faces get a thicker line and a flick
+        const pts = [], flick = hd.female ? 1.3 : 1.05;
+        for (const u of [-1, -0.5, 0, 0.5, 1, flick]) {
+          const y = e.y + er * 0.6 * Math.sqrt(Math.max(0.05, 1 - 0.8 * Math.min(1, u * u))) + (u > 1 ? er * 0.22 : 0);
+          pts.push(new V(e.x + s * u * er * 1.02, y, e.z + er * (0.3 - 0.14 * Math.min(1, u * u))));
         }
+        const lw = er * (hd.female ? 0.15 : 0.11);
+        M.add(sweep(pts, (t) => [lw * (1 - 0.5 * t), lw * 0.8], 5, '#1c1418', 'eyes', { cap0: 0.5, cap1: 0.5 }));
+        // brow: an arch whose inner end sits lower with nerve (set) and higher without it (worried)
+        const bc = hairC ? shade(hairC, 0.72) : shade(skin, 0.55);
+        const bpts = [];
+        for (const u of [-1, -0.35, 0.3, 1]) {
+          const yu = eyeY + 0.21 + 0.05 * (1 - u * u) - 0.07 * nerve * (1 - u) / 2;
+          bpts.push(onFace(s * (eyeX + u * 0.15), yu, p.headW * 0.01));
+        }
+        const bh = p.headW * (0.03 + 0.02 * hd.brow), bt = p.headW * 0.014;
+        M.add(sweep(bpts, (t) => [bt, bh * (1 - 0.55 * t)], 5, bc, 'head', { up: () => new V(0, 1, 0), cap0: 0.5, cap1: 0.6 }));
       }
     }
-    // nose
-    if (hd.nose > 0) {
+    // nose: a bridge from between the eyes to a rounded tip, with a nostril wing each side
+    if (hd.nose > 0 && hd.kind !== 'goblin' && hd.kind !== 'troll') {
+      const len = p.headD * 0.075 * hd.nose * (hd.female ? 0.85 : 1);
+      const n0 = onFace(0, 0.1, 0), n1 = onFace(0, -0.06, len * 0.5), tip = onFace(0, -0.2, len);
+      const nc = shade(skin, 0.97), nw = p.headW * 0.045 * Math.sqrt(hd.nose);
+      M.add(sweep([n0, n1, tip], (t) => [nw * (0.6 + 0.5 * t), nw * 0.6], 6, nc, 'head', { cap0: 0.3, cap1: 0.4 }));
+      M.add(blob(tip.x, tip.y, tip.z - nw * 0.2, nw * 1.1, nw * 0.9, nw * 0.9, { w: 8, h: 6 }), nc, 'head');
+      for (const s of [1, -1]) M.add(blob(tip.x + s * nw * 1.05, tip.y - nw * 0.25, tip.z - nw * 0.75, nw * 0.62, nw * 0.5, nw * 0.6, { w: 6, h: 5 }), nc, 'head');
+    } else if (hd.nose > 0) {
       const n = surf(0, -0.15, 1);
       const len = p.headD * 0.09 * hd.nose;
       const tip = new V(n.x, n.y - len * (hd.kind === 'goblin' ? 0.1 : 0.45), n.z + len);
       M.add(spike(new V(n.x, n.y + len * 0.4, n.z - len * 0.5), tip, p.headW * 0.06 * Math.sqrt(hd.nose), 6, 0.8), shade(skin, 0.94), 'head');
-      if (hd.kind === 'troll' || hd.kind === 'orc') M.add(blob(n.x, n.y - len * 0.3, n.z + len * 0.4, p.headW * 0.09, p.headW * 0.06, p.headW * 0.06, { w: 8, h: 6 }), shade(skin, 0.92), 'head');
+      if (hd.kind === 'troll') M.add(blob(n.x, n.y - len * 0.3, n.z + len * 0.4, p.headW * 0.09, p.headW * 0.06, p.headW * 0.06, { w: 8, h: 6 }), shade(skin, 0.92), 'head');
+    }
+    // mouth: lips and the line between them
+    if (!hd.muzzle && hd.kind !== 'skull' && hd.kind !== 'alien') {
+      const bk = look.beard && BEARD_THICK[look.beard.kind];
+      const m = onFace(0, -0.47, p.headD * 0.006 + (bk ? bk * p.headW * 0.6 : 0)), mw = p.headW * (hd.female ? 0.115 : 0.13);
+      M.add(blob(m.x, m.y, m.z - p.headD * 0.01, mw, p.headH * 0.026, p.headD * 0.03, { w: 10, h: 6 }), mix(skin, '#9a3f3a', hd.female ? 0.38 : 0.22), 'head');
+      const lip = [new V(m.x - mw * 0.95, m.y - p.headH * 0.004, m.z - p.headD * 0.008), new V(m.x, m.y + p.headH * 0.003, m.z + p.headD * 0.012), new V(m.x + mw * 0.95, m.y - p.headH * 0.004, m.z - p.headD * 0.008)];
+      M.add(sweep(lip, () => p.headW * 0.008, 4, '#4a2626', 'head', { cap0: 0.5, cap1: 0.5 }));
     }
     if (hd.kind === 'orc' || hd.kind === 'troll') {
       for (const s of [1, -1]) {
@@ -1471,6 +1531,31 @@ function buildHair(M, look, Bp, surf, toModel, capped = false, onlyLong = false)
     const v = (capped ? 0.04 : h.vol) + extra;
     return toModel(s[0] * (1 + v), s[1] * (1 + v), s[2] * (1 + v));
   };
+  const outward = (q) => new V().subVectors(q, C).normalize();
+  // Combed locks: flat ribbons lying on the cap from the crown (or the part) down to just past the
+  // hairline, each a little lighter or darker, raised mid-way for volume and pointed at the tip.
+  // Not on very short, flat, striped, lumpy, locked or bald styles.
+  if (!onlyLong && !capped && cap >= 0.07 && !h.flat && !h.stripes && !(h.noise >= 0.3) && !h.locks && !h.bald && !h.hive) {
+    const rnd = mulberry32(seed ^ 0x7a11);
+    const partX = h.part ? 0.3 : h.swoop ? 0.22 * (seed & 1 ? 1 : -1) : 0;
+    const crown = new V(partX, 1, -0.2).normalize();
+    const N = 16;
+    for (let i = 0; i < N; i++) {
+      const az = (i + rnd() * 0.6) / N * TAU - Math.PI;
+      const endE = hl(az) - 0.03 - rnd() * 0.07;
+      const endDir = new V(Math.sin(az) * Math.cos(endE), Math.sin(endE), Math.cos(az) * Math.cos(endE));
+      const pts = [], ups = [];
+      for (let k = 0; k <= 6; k++) {
+        const t = k / 6, d = crown.clone().lerp(endDir, t).normalize();
+        const sh = headShape(look.head, d.x, d.y, d.z), v = cap * 0.92 + 0.025 + 0.05 * Math.sin(Math.PI * t) * (0.6 + rnd() * 0.8);
+        const q = toModel(sh[0] * (1 + v), sh[1] * (1 + v), sh[2] * (1 + v));
+        pts.push(q); ups.push(outward(q));
+      }
+      const w = p.headW * (0.15 + 0.05 * rnd()), c = shade(col, 0.88 + 0.22 * rnd());
+      M.add(sweep(pts, (t) => [w * (0.75 + 0.35 * Math.sin(Math.PI * Math.min(1, t * 1.25))) * (1 - 0.85 * t * t * t), p.headW * 0.028], 5,
+        (t) => (t > 0.85 ? shade(c, 0.85) : c), 'head', { up: (k) => ups[k], cap0: 0.3, cap1: 0.6 }));
+    }
+  }
   const dark = shade(col, 0.82);
   const headToChest = (y) => {
     const t = sstep(Bp.head.y + p.headH * 0.2, Bp.neck.y - p.chest * 0.2, y);
@@ -1486,17 +1571,40 @@ function buildHair(M, look, Bp, surf, toModel, capped = false, onlyLong = false)
       const belowHead = y < Bp.head.y;
       const backZ = belowHead ? -(lerp(p.chestD, p.waistD, sstep(Bp.chest.y + p.chest, Bp.spine.y, y)) + 0.012) + Bp.chest.z : C.z - p.headD * 0.42;
       const rz = lerp(p.headD * 0.3, p.headD * 0.12, t);
-      const rx = lerp(p.headW * 0.6, p.headW * (0.42 + (h.noise || 0) * 0.4), Math.pow(t, 0.7));
-      rings.push({ y, rx, rz, z: backZ - rz * 0.4, w: headToChest(y), c: t > 0.9 ? dark : col });
+      const rx = lerp(p.headW * 0.55, p.headW * (0.36 + (h.noise || 0) * 0.4), Math.pow(t, 0.7));
+      rings.push({ y, rx, rz, z: backZ - rz * 0.4, w: headToChest(y), c: shade(col, 0.7) });
     }
     M.add(loft(rings, 12, { capTop: 0.4, capBottom: 0.5 }));
+    // clumps: 5 (7 for very long hair) flat ribbons across the back, each its own length
+    const rnd = mulberry32(seed ^ 0x10c5);
+    const backAt = (y) => y < Bp.head.y ? -(lerp(p.chestD, p.waistD, sstep(Bp.chest.y + p.chest, Bp.spine.y, y)) + 0.012) + Bp.chest.z : C.z - p.headD * 0.45;
+    const nC = h.long > 0.4 ? 7 : 5;
+    for (let i = 0; i < nC; i++) {
+      const u = i / (nC - 1) * 2 - 1, az = Math.PI + u * 1.05;
+      const root = hp(0.2, az);
+      const len = (C.y - bot) * (0.86 + rnd() * 0.22);
+      const pts = [], ups = [];
+      for (let k = 0; k <= 7; k++) {
+        const t = k / 7, y = root.y - len * t;
+        const x = root.x * (1 - 0.35 * t) + u * p.headW * 0.08 * t + (h.noise || 0) * (rnd() - 0.5) * p.headW * 0.3 * t;
+        const z = lerp(root.z, backAt(y) - p.headW * 0.03, sstep(0, 0.3, t));
+        const q = new V(x, y, z);
+        pts.push(q); ups.push(new V(x, 0, z - Bp.chest.z).normalize());
+      }
+      const w = p.headW * (nC > 5 ? 0.24 : 0.3) * (0.9 + rnd() * 0.2), c = shade(col, 0.86 + 0.2 * rnd());
+      M.add(sweep(pts, (t) => [w * (1 - 0.85 * t * t * t), p.headW * 0.05], 5, (t) => (t > 0.85 ? shade(c, 0.8) : c),
+        (t) => headToChest(lerp(root.y, root.y - len, t)), { up: (k) => ups[k], cap0: 0.4, cap1: 0.5 }));
+    }
     if (h.strands || h.strand) {
       for (const s of h.strand ? [h.strand] : [1, -1]) {
-        const a = s * 1.45;
-        const b = hp(0.05, a);
+        // from the side of the cap down past the cheek onto the front of the shoulder, flat side
+        // facing forward-out so it shows from the front
+        const b = hp(0.05, s * 1.2, -0.02);
         const len = Math.min(h.long, 0.22) * p.H * (h.strand ? 1.6 : 1);
-        const path = [b, new V(b.x + s * 0.012, b.y - len * 0.4, b.z + 0.02), new V(b.x + s * (p.chestW - p.headW * 0.4) * 0.8, b.y - len, b.z + p.chestD * 0.6)];
-        M.add(sweep(path, (t) => [p.headW * 0.16 * (1 - t * 0.4), p.headW * 0.08], 8, (t) => t > 0.85 ? dark : col, (t) => headToChest(lerp(b.y, b.y - len, t)), { cap0: 0.3, cap1: 0.6 }));
+        const path = [b, new V(b.x * 0.96, b.y - len * 0.3, b.z + p.headD * 0.04), new V(b.x * 0.98 + s * p.headW * 0.04, b.y - len * 0.65, b.z + p.chestD * 0.35), new V(b.x + s * p.headW * 0.1, b.y - len, b.z + p.chestD * 0.62)];
+        const face = new V(s * 0.45, 0, 1).normalize();
+        M.add(sweep(path, (t) => [p.headW * (0.12 + 0.06 * Math.sin(Math.PI * Math.min(1, t * 1.3))) * (1 - 0.7 * t * t), p.headW * 0.05], 5, (t) => t > 0.85 ? dark : col,
+          (t) => headToChest(lerp(b.y, b.y - len, t)), { up: () => face, cap0: 0.3, cap1: 0.6 }));
       }
     }
   }
@@ -1532,11 +1640,13 @@ function buildHair(M, look, Bp, surf, toModel, capped = false, onlyLong = false)
   if (h.spikes) {
     const rnd = mulberry32(look.seed ^ 0x51ed);
     for (let i = 0; i < h.spikes; i++) {
-      const a = h.front ? (rnd() - 0.5) * 1.6 : rnd() * TAU, e = h.front ? 0.35 + rnd() * 0.3 : 0.35 + rnd() * 1.0;
+      const a = h.fringe ? (rnd() - 0.5) * 1.6 : rnd() * TAU, e = h.fringe ? 0.35 + rnd() * 0.3 : 0.35 + rnd() * 1.0;
       const b = hp(e, a, -0.02), out = new V().subVectors(b, toModel(0, 0, 0)).normalize();
-      out.y += 0.35; out.normalize();
+      // fringe blades point down-forward, tall (liberty) spikes stand up, the rest sweep up and back
+      if (h.fringe) out.add(new V(0, -0.55, 0.35)); else if (h.spikeLen >= 0.6) out.add(new V(0, 0.7, -0.1)); else out.add(new V(0, 0.3, -0.35));
+      out.normalize();
       const len = p.headH * h.spikeLen * (0.7 + rnd() * 0.5);
-      M.add(spike(b, b.clone().addScaledVector(out, len), p.headW * 0.11, 5), col, 'head');
+      M.add(spike(b, b.clone().addScaledVector(out, len), p.headW * 0.13, 5, 0.45, new V(Math.cos(a), 0, -Math.sin(a))), shade(col, 0.9 + 0.2 * rnd()), 'head');
     }
   }
   if (h.hawk) {
@@ -1561,19 +1671,23 @@ function buildHair(M, look, Bp, surf, toModel, capped = false, onlyLong = false)
   }
 }
 
+// beard shell thickness as a fraction of head width (doubled radius); the lips sit this far out too
+const BEARD_THICK = { beard: 0.1, medium: 0.08, trimmed: 0.045, winter: 0.2 };
+
 function buildBeard(M, look, surf) {
   const T = E(), V = T.Vector3, b = look.beard, p = look.p;
-  const spec = { beard: [0.16, 0.22], medium: [0.12, 0.12], trimmed: [0.06, 0.03], winter: [0.28, 0.45] }[b.kind] || [0.14, 0.18];
+  const spec = { beard: [BEARD_THICK.beard, 0.2], medium: [BEARD_THICK.medium, 0.11], trimmed: [BEARD_THICK.trimmed, 0.03], winter: [BEARD_THICK.winter, 0.42] }[b.kind] || [0.09, 0.16];
   const [thick, drop] = spec;
   const g = new T.SphereGeometry(1, 22, 16);
   const P = g.getAttribute('position'), keep = new Uint8Array(P.count);
   const center = surf(0, 0, 0);
   for (let i = 0; i < P.count; i++) {
     const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
-    const inside = y < -0.12 + (z < 0.4 ? 0.12 : 0) && z > -0.25 - (y < -0.6 ? 0.3 : 0);
-    const mouth = z > 0.7 && Math.abs(x) < 0.3 && y > -0.56 && y < -0.42 && b.kind !== 'winter';
+    const top = -0.3 + 0.2 * sstep(0.85, 0.25, z);
+    const inside = y < top && z > -0.25 - (y < -0.6 ? 0.3 : 0);
+    const mouth = z > 0.68 && Math.abs(x) < 0.26 && y > -0.54 && y < -0.4 && b.kind !== 'winter';
     keep[i] = inside && !mouth ? 1 : 0;
-    const f = sstep(-0.12, -0.4, y) * sstep(-0.3, 0.2, z);
+    const f = sstep(top, top - 0.25, y) * sstep(-0.3, 0.2, z);
     const q = surf(x, y, z);
     const out = new V().subVectors(q, center).normalize();
     q.addScaledVector(out, thick * p.headW * 0.5 * f);

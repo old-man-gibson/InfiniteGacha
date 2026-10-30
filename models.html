@@ -52,13 +52,22 @@
 <script>
 // Gallery for figure3d.js: rolls characters with lpc.js, shows each sprite next to its model, and
 // drives every animation layer. URL: ?seed=N (repeatable rolls), ?mode=fight, ?race=orc, ?n=12,
-// ?zoom=2, ?focus=3, ?gear=0, ?layout=row, ?pitch=20, ?yaw=0.5, ?job=mining, ?energy=0.2, ?hurt=1.
+// ?zoom=2, ?focus=3, ?gear=0, ?layout=row, ?gap=0.6, ?pitch=20, ?yaw=0.5, ?ty=1.0 (look-at height),
+// ?job=mining, ?energy=0.2, ?hurt=1.
 const Q = new URLSearchParams(location.search);
-if (Q.get('seed')) {
+// ?seed=N: rolls draw from their own seeded stream, installed as Math.random (and rng.js's rand,
+// which stats.js uses) only while rolling. three.js takes Math.random UUIDs for every geometry,
+// so a shared stream would make a seed's characters depend on how much geometry gets built.
+const SEEDED = Q.get('seed') ? (() => {
   let a = +Q.get('seed') >>> 0;
-  Math.random = () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  // stats.js rolls through rng.js (crypto) by default: route it through the same seed
-  if (typeof Rng !== 'undefined') Rng.rand = () => Math.random();
+  return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+})() : null;
+function seeded(fn) {
+  if (!SEEDED) return fn();
+  const mr = Math.random, rr = typeof Rng !== 'undefined' ? Rng.rand : null;
+  Math.random = SEEDED;
+  if (rr) Rng.rand = SEEDED;
+  try { return fn(); } finally { Math.random = mr; if (rr) Rng.rand = rr; }
 }
 const MODES = ['idle', 'walk', 'run', 'work', 'fight', 'talk', 'sit', 'fall'];
 const JOBS = ['mixed', 'mining', 'farming', 'foraging', 'smithing', 'alchemy', 'cooking', 'maintenance', 'building', 'training'];
@@ -95,12 +104,13 @@ function roll() {
   const list = document.getElementById('list');
   list.innerHTML = '';
   const n = +(Q.get('n') || 12), cols = Math.min(4, n), race = document.getElementById('race').value || Q.get('race') || '';
+  const chars = seeded(() => Array.from({ length: n }, () => makeChar(race)));
   for (let i = 0; i < n; i++) {
-    const ch = makeChar(race);
+    const ch = chars[i];
     const fig = Figure3D.create(ch, {});
     const lineup = Q.get('layout') === 'row';
     const col = lineup ? i : i % cols, row = lineup ? 0 : Math.floor(i / cols);
-    const home = lineup ? { x: (i - (n - 1) / 2) * 0.95, z: 0 } : { x: (col - (cols - 1) / 2) * 1.8, z: (row - (Math.ceil(n / cols) - 1) / 2) * 2.0 };
+    const home = lineup ? { x: (i - (n - 1) / 2) * +(Q.get('gap') || 0.95), z: 0 } : { x: (col - (cols - 1) / 2) * 1.8, z: (row - (Math.ceil(n / cols) - 1) / 2) * 2.0 };
     fig.group.position.set(home.x, 0, home.z);
     scene.add(fig.group);
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.32 * fig.height, 20).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }));
@@ -207,7 +217,7 @@ function frame(now) {
   const W = renderer.domElement.clientWidth, H = renderer.domElement.clientHeight;
   if (renderer.domElement.width !== Math.floor(W * renderer.getPixelRatio())) { renderer.setSize(W, H, false); camera.aspect = W / H; camera.updateProjectionMatrix(); }
   if (cam.want) { const k = 1 - Math.exp(-dt * 5); cam.tx += (cam.want.x - cam.tx) * k; cam.tz += (cam.want.z - cam.tz) * k; cam.d += (cam.want.d - cam.d) * k; }
-  const pitch = cam.pitch * Math.PI / 180, ty = cam.d < 5 ? 0.55 : 0.3;
+  const pitch = cam.pitch * Math.PI / 180, ty = Q.get('ty') ? +Q.get('ty') : cam.d < 5 ? 0.55 : 0.3;
   camera.position.set(cam.tx + Math.sin(cam.yaw) * Math.cos(pitch) * cam.d, ty + Math.sin(pitch) * cam.d, cam.tz + Math.cos(cam.yaw) * Math.cos(pitch) * cam.d);
   camera.lookAt(cam.tx, ty, cam.tz);
 

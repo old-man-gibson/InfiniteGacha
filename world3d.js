@@ -1519,10 +1519,10 @@ function create(cv, { fill = false } = {}) {
 
   // ---------- 3D figures (figure3d.js) ----------
   // A character with an LPC record is drawn as a Figure3D model when figure3d.js is loaded; the
-  // walk-sheet billboard stays as the fallback. A model takes about 5 ms to build, so models are
-  // built until FIG_BUDGET_MS of the frame is spent and the rest keep their billboard until a
-  // later frame. A model is rebuilt when Figure3D.signature changes (selections or equipped
-  // items), checked once a second.
+  // walk-sheet billboard stays as the fallback. A model takes about 10 ms to build, so models are
+  // built until FIG_BUDGET_MS of the frame is spent (in practice one per frame) and the rest keep
+  // their billboard until a later frame. A model is rebuilt when Figure3D.signature changes
+  // (selections or equipped items), checked once a second.
   const FIG_BUDGET_MS = 8;
   let figBudget = 0, fx = null;
   const figPatch = (m) => patchMaterial(m, U);
