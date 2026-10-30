@@ -52,7 +52,7 @@
 <script>
 // Gallery for figure3d.js: rolls characters with lpc.js, shows each sprite next to its model, and
 // drives every animation layer. URL: ?seed=N (repeatable rolls), ?mode=fight, ?race=orc, ?n=12,
-// ?zoom=2, ?focus=3, ?gear=0, ?layout=row, ?gap=0.6, ?pitch=20, ?yaw=0.5, ?ty=1.0 (look-at height),
+// ?zoom=2, ?focus=3, ?gear=0, ?kit=light|medium|heavy, ?layout=row, ?gap=0.6, ?pitch=20, ?yaw=0.5, ?ty=1.0 (look-at height),
 // ?job=mining, ?energy=0.2, ?hurt=1.
 const Q = new URLSearchParams(location.search);
 // ?seed=N: rolls draw from their own seeded stream, installed as Math.random (and rng.js's rand,
@@ -79,6 +79,15 @@ function randomGear() {
   const q = () => Math.floor(Math.random() * 6);
   const pick = (a) => a[Math.floor(Math.random() * a.length)];
   const e = {};
+  // ?kit=light|medium|heavy: helm, mail and boots of that weight on everyone, with a weapon to match
+  const kit = Q.get('kit');
+  if (kit) {
+    const w = { light: 'dagger', medium: 'sword', heavy: 'axe' }[kit] || 'sword';
+    e.weapon = { key: w, type: w, quality: q(), slot: 'weapon' };
+    if (kit !== 'light') { const o = kit === 'heavy' ? 'tower' : 'kite'; e.offhand = { key: o, type: o, quality: q(), slot: 'offhand' }; }
+    for (const [slot, piece] of [['head', 'helm'], ['body', 'mail'], ['feet', 'boots']]) e[slot] = { key: kit + '_' + piece, type: kit, quality: q(), slot };
+    return e;
+  }
   const w = pick(['sword', 'axe', 'spear', 'bow', 'dagger', 'staff']);
   e.weapon = { key: w, type: w, quality: q(), slot: 'weapon' };
   if (['sword', 'axe', 'dagger'].includes(w) && Math.random() < 0.5) { const o = pick(['buckler', 'kite', 'tower']); e.offhand = { key: o, type: o, quality: q(), slot: 'offhand' }; }
