@@ -10,7 +10,11 @@
 // grid is cut from), and buildTown adds stone retaining walls along each platform's foot, stairs
 // between floors, and a plaza with a banner on each floor. The town is a floating island
 // (BaseLayout.islandSdf): the terrain is cut at its rim, and skyIsland() hangs a layered rock
-// underside below it, with roots, a few islets, a waterfall from its pond and clouds below.
+// underside below it, with roots, a few islets, a waterfall from its pond and clouds below. How
+// finished the town is follows its tier (FINISH): road surfaces from worn dirt to cobbles, roofs
+// from thatch to slate, houses from bare walls to half-timbering, shutters and quoins, and what
+// stands in the square, from a fire ring to a tiered fountain. The town's static meshes are merged
+// by material once built (bake), so the detail costs a few dozen draw calls.
 //
 // This is a second way of DRAWING the same field state, not a second simulation. Nothing in
 // here writes to the field; it reads `s.map`, `s.seen`, `s.actors` and `s.portal` and turns
@@ -81,6 +85,41 @@ const STYLE = {
   },
 };
 
+/**
+ * How finished the town is at each town tier (economy.js TOWN: Camp, Outpost, Village, Town,
+ * City; the layout's `top`). Each tier keeps what the one below has and adds to it.
+ *   path     road surface, and its two colours: worn dirt that frays into the grass, packed earth
+ *            with pebbles, gravel with a timber edging, flagstones, cobbles (PAVE_GLSL draws 1-4)
+ *   roof     covering of every ordinary roof (ROOF_LOOK): texture, palette and ridge
+ *   plinth   tiles of stone footing under a house's walls
+ *   timber   0 corner posts, 1 and a beam at each storey, 2 and studs and braces (half-timbered)
+ *   window   0 a dark opening in a timber frame, 1 and plank shutters, 2 a white frame with a
+ *            mullion cross and painted shutters, 3 and a flower box, 4 and a stone sill and lintel
+ *   door     0 an opening under a lintel, 1 and a frame, 2 and a canopy, 3 and a step and a lantern
+ *   quoins   dressed stone blocks up a plastered house's corners in place of its corner posts
+ *   fence    the surround of a fenced workshop: stakes, rails, white pickets, iron railing
+ *   lamps    tiles between street lamps along the roads (0: none)
+ *   square   what stands in the square: fire ring, well, basin, fountain, tiered fountain
+ *   terrace  the top of a raised floor's wall: bare, merlons, coping, coping and a balustrade
+ */
+const FINISH = [
+  { path: 0, paths: ['#a3845a', '#8c7150'], roof: 'thatch',  plinth: 0,    timber: 0, window: 0, door: 0, quoins: false, fence: 'stakes',  lamps: 0,  square: 'fire',     terrace: 'bare' },
+  { path: 1, paths: ['#b09670', '#9c835e'], roof: 'thatch',  plinth: 0.14, timber: 1, window: 1, door: 1, quoins: false, fence: 'rails',   lamps: 0,  square: 'well',     terrace: 'bare' },
+  { path: 2, paths: ['#b9ad97', '#a69b86'], roof: 'shingle', plinth: 0.26, timber: 2, window: 2, door: 2, quoins: false, fence: 'rails',   lamps: 12, square: 'basin',    terrace: 'merlons' },
+  { path: 3, paths: ['#cfc6b4', '#bdb3a0'], roof: 'tile',    plinth: 0.36, timber: 2, window: 3, door: 3, quoins: false, fence: 'pickets', lamps: 9,  square: 'fountain', terrace: 'coping' },
+  { path: 4, paths: ['#aba59a', '#959084'], roof: 'slate',   plinth: 0.46, timber: 2, window: 4, door: 3, quoins: true,  fence: 'railing', lamps: 7,  square: 'tiered',   terrace: 'balustrade' },
+];
+const finishOf = (lay) => FINISH[Math.max(0, Math.min(FINISH.length - 1, (lay && lay.top) || 0))];
+
+/** Each roof covering: the palette of an ordinary roof, overhang added, and what caps the ridge. */
+const ROOF_LOOK = {
+  thatch:  { colours: ['#c4a45e', '#b8944a', '#a98b52', '#cbb06c'], oh: 0.14, ridge: 'roll' },
+  shingle: { colours: ['#7d5d40', '#6e4f33', '#8a6b4c', '#5f4a36'], oh: 0, ridge: 'board' },
+  tile:    { colours: ['#b5532f', '#c46a3c', '#a8452f', '#9c4d33'], oh: 0, ridge: 'cap' },
+  slate:   { colours: ['#55657d', '#5c6470', '#46506a', '#61707f', '#7a4a3a', '#5f6b58'], oh: 0, ridge: 'cap' },
+};
+const SHUTTERS = ['#4d6c9a', '#5f7d3c', '#8e4a3a', '#3f5f5a', '#7a5233', '#6a4c94'];
+
 // ---------- noise, deterministic per map ----------
 
 function hash(x, y) {
@@ -149,6 +188,62 @@ function paintTexture(kind) {
   return t;
 }
 
+/**
+ * A roof covering, greyscale (the roof's colour multiplies it), one tile per repeat: u runs along
+ * the ridge and v down the slope, so courses lie along the ridge with their lower edge in shadow.
+ *   thatch   2 courses of straw a tile; shingle 4 courses of staggered shingles; tile 3 courses of
+ *            round clay tiles 6 to the tile; slate 5 courses of staggered slates
+ */
+function roofTexture(kind) {
+  const N = 128, c = canvas(N), g = c.getContext('2d');
+  let k = 1;
+  const r = () => hash(k++, 23);
+  const wrap = (fn) => { for (const dx of [-N, 0, N]) for (const dy of [-N, 0, N]) fn(dx, dy); };
+  const course = (y0, hgt, lo) => {             // a course: light at its top, shadow at its foot
+    const grd = g.createLinearGradient(0, y0, 0, y0 + hgt);
+    grd.addColorStop(0, '#f4f4f4'); grd.addColorStop(0.75, '#dedede'); grd.addColorStop(1, lo);
+    g.fillStyle = grd; g.fillRect(0, y0, N, hgt);
+  };
+  if (kind === 'thatch') {
+    for (let row = 0; row < 2; row++) course(row * N / 2, N / 2, '#8c8c8c');
+    g.lineWidth = 1.1;
+    for (let i = 0; i < 1100; i++) {
+      const x = r() * N, y = r() * N, len = 6 + r() * 16, v = 140 + Math.floor(r() * 110);
+      g.strokeStyle = `rgba(${v},${v},${v},.5)`;
+      const dx = (r() - 0.5) * 2;
+      wrap((ox, oy) => { g.beginPath(); g.moveTo(x + ox, y + oy); g.lineTo(x + dx + ox, y + len + oy); g.stroke(); });
+    }
+  } else if (kind === 'shingle' || kind === 'slate') {
+    const rows = kind === 'shingle' ? 4 : 5, rh = N / rows;
+    for (let row = 0; row < rows; row++) {
+      const y0 = row * rh;
+      let x = -(row % 2) * (kind === 'shingle' ? 13 : 16);
+      while (x < N) {
+        const sw = kind === 'shingle' ? 18 + r() * 14 : 30 + r() * 4, v = (kind === 'shingle' ? 190 : 205) + Math.floor(r() * 45);
+        const grd = g.createLinearGradient(0, y0, 0, y0 + rh);
+        grd.addColorStop(0, `rgb(${v},${v},${v})`); grd.addColorStop(0.8, `rgb(${v - 18},${v - 18},${v - 18})`); grd.addColorStop(1, `rgb(${v - 80},${v - 80},${v - 80})`);
+        g.fillStyle = grd;
+        wrap((ox) => g.fillRect(x + ox, y0, sw - 1.5, rh - 1));
+        x += sw;
+      }
+    }
+  } else if (kind === 'tile') {
+    const rows = 3, cols = 6, rh = N / rows, cw = N / cols;
+    for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
+      const x0 = col * cw, y0 = row * rh, v = 215 + Math.floor(r() * 35);
+      const grd = g.createLinearGradient(x0, 0, x0 + cw, 0);         // round across: lit, crest, shade
+      grd.addColorStop(0, `rgb(${v - 70},${v - 70},${v - 70})`); grd.addColorStop(0.35, `rgb(${v},${v},${v})`); grd.addColorStop(1, `rgb(${v - 90},${v - 90},${v - 90})`);
+      g.fillStyle = grd; g.fillRect(x0, y0, cw, rh);
+      g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(x0, y0 + rh - 5, cw, 5);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
 function radialTexture(inner = 'rgba(255,255,255,1)', outer = 'rgba(255,255,255,0)', size = 64) {
   const c = canvas(size), g = c.getContext('2d');
   const grd = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
@@ -170,24 +265,53 @@ function radialTexture(inner = 'rgba(255,255,255,1)', outer = 'rgba(255,255,255,
 // dithered away, so the party is never hidden behind a tree.
 // `roof` is for town roofs: dithered out by U.uRoofCut (0..1), which renderTown raises as the
 // camera closes in, so a close view shows who is inside.
-function patchMaterial(mat, U, { overlay = false, fade = false, roof = false } = {}) {
+// `pave` is for the town's terrain: on roads (the aRoad vertex attribute, 1 on a road) it draws
+// the surface the town tier has laid (U.uPave, FINISH.path in buildTown): 1 packed earth with
+// pebbles, 2 gravel with a timber edging, 3 flagstones, 4 cobbles, the last two with a kerb of
+// dressed stone along each edge. 0 leaves the worn dirt the vertex colours give.
+const PAVE_GLSL = `
+  float paveHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  vec2 paveHash2(vec2 p) { return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453); }
+  // nearest and second-nearest distance to jittered cell points, and the nearest cell's hash
+  vec3 paveCells(vec2 p, float jit) {
+    vec2 i = floor(p), f = fract(p);
+    float d1 = 8.0, d2 = 8.0, id = 0.0;
+    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+      vec2 g = vec2(float(x), float(y));
+      vec2 r = g + 0.5 + (paveHash2(i + g) - 0.5) * jit - f;
+      float d = dot(r, r);
+      if (d < d1) { d2 = d1; d1 = d; id = paveHash(i + g); } else if (d < d2) { d2 = d; }
+    }
+    return vec3(sqrt(d1), sqrt(d2), id);
+  }`;
+function patchMaterial(mat, U, { overlay = false, fade = false, roof = false, pave = false } = {}) {
   if (overlay) mat.defines = Object.assign(mat.defines || {}, { WORLD_OVERLAY: '' });
   if (fade) mat.defines = Object.assign(mat.defines || {}, { OCCLUDER_FADE: '' });
   if (roof) mat.defines = Object.assign(mat.defines || {}, { ROOF_FADE: '' });
+  if (pave) mat.defines = Object.assign(mat.defines || {}, { TOWN_PAVE: '' });
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uSeen = U.uSeen;
     sh.uniforms.uOverlay = U.uOverlay;
     sh.uniforms.uMapSize = U.uMapSize;
     sh.uniforms.uFocus = U.uFocus;
     sh.uniforms.uRoofCut = U.uRoofCut;
+    sh.uniforms.uPave = U.uPave;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWorld3;')
+      .replace('#include <common>', `#include <common>
+        varying vec3 vWorld3;
+        #ifdef TOWN_PAVE
+          attribute float aRoad;
+          varying float vRoad;
+        #endif`)
       .replace('#include <project_vertex>', `#include <project_vertex>
         vec4 w3 = vec4(transformed, 1.0);
         #ifdef USE_INSTANCING
           w3 = instanceMatrix * w3;
         #endif
-        vWorld3 = (modelMatrix * w3).xyz;`);
+        vWorld3 = (modelMatrix * w3).xyz;
+        #ifdef TOWN_PAVE
+          vRoad = aRoad;
+        #endif`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWorld3;
@@ -195,7 +319,48 @@ function patchMaterial(mat, U, { overlay = false, fade = false, roof = false } =
         uniform sampler2D uOverlay;
         uniform vec2 uMapSize;
         uniform vec4 uFocus;
-        uniform float uRoofCut;`)
+        uniform float uRoofCut;
+        #ifdef TOWN_PAVE
+          uniform float uPave;
+          varying float vRoad;
+          ${PAVE_GLSL}
+        #endif`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        #ifdef TOWN_PAVE
+          if (uPave > 0.5) {
+            vec2 pp = vWorld3.xz;
+            vec3 base = vColor.rgb;                     // the road's colour, without the grass texture
+            vec3 pv = base;
+            float on = smoothstep(0.42, 0.66, vRoad);
+            if (uPave < 1.5) {
+              // packed earth: a scatter of pebbles on it
+              vec3 c = paveCells(pp * 3.2, 0.9);
+              float peb = (1.0 - smoothstep(0.14, 0.2, c.x)) * step(0.7, c.z);
+              pv = mix(diffuseColor.rgb, base * (1.15 + 0.3 * c.z), peb);
+            } else if (uPave < 2.5) {
+              // gravel: grains about a tenth of a tile, and a timber edging along each side
+              vec3 c = paveCells(pp * 8.0, 1.0);
+              pv = base * (0.66 + 0.6 * c.z) * (0.7 + 0.3 * smoothstep(0.0, 0.25, c.y - c.x));
+              float edge = smoothstep(0.34, 0.4, vRoad) * (1.0 - smoothstep(0.48, 0.54, vRoad));
+              pv = mix(pv, vec3(0.34, 0.24, 0.15), edge);
+              on = max(on, edge);
+            } else {
+              // flagstones (3, about 0.6 tiles across) or cobbles (4, about 0.3), grouted, the
+              // cobbles domed; a kerb of long dressed stones along each edge
+              float flags = step(uPave, 3.5);
+              vec3 c = paveCells(pp * mix(3.4, 1.65, flags), mix(0.85, 0.55, flags));
+              float grout = smoothstep(0.025, mix(0.13, 0.07, flags), c.y - c.x);
+              float dome = mix(1.0 - 0.32 * smoothstep(0.08, 0.5, c.x), 1.0, flags);
+              vec3 stone = base * (0.84 + 0.3 * c.z) * dome;
+              pv = mix(base * 0.5, stone, grout);
+              float kerb = smoothstep(0.34, 0.4, vRoad) * (1.0 - smoothstep(0.5, 0.56, vRoad));
+              vec3 kc = paveCells(pp * 1.3, 0.4);
+              pv = mix(pv, vec3(0.8, 0.77, 0.7) * (0.92 + 0.12 * kc.z) * smoothstep(0.0, 0.05, kc.y - kc.x), kerb);
+              on = max(on, kerb);
+            }
+            diffuseColor.rgb = mix(diffuseColor.rgb, pv, on);
+          }
+        #endif`)
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
         #if defined(OCCLUDER_FADE) || defined(ROOF_FADE)
           // 4x4 ordered dither: an even screen-door rather than speckle
@@ -346,6 +511,7 @@ function create(cv, { fill = false } = {}) {
     uMapSize: { value: new THREE.Vector2(1, 1) },
     uFocus: { value: new THREE.Vector4(0, 0, 0, 0) },      // xyz = squad centre, w = fade radius (0 = off)
     uRoofCut: { value: 0 },                                  // town: fraction of roof fragments discarded
+    uPave: { value: 0 },                                     // town: the road surface (FINISH.path)
   };
   const fogU = { fogColor: { value: new THREE.Color() }, fogNear: { value: 10 }, fogFar: { value: 100 } };
 
@@ -482,6 +648,10 @@ function create(cv, { fill = false } = {}) {
     const gA = C(st.grass[0]), gB = C(st.grass[1]), dry = C(st.dry), moss = C(st.moss), dirt = C(st.dirt),
       road = C(st.road), rock = C(st.rock), top = C(st.top);
     const c = new THREE.Color(), tmp = new THREE.Color();
+    // the town's roads take its tier's surface; worn dirt and packed earth fray into the grass
+    const fin = map.layout ? finishOf(map.layout) : null;
+    const pathA = fin ? C(fin.paths[0]) : dirt, pathB = fin ? C(fin.paths[1]) : road;
+    const fray = fin ? [0.55, 0.2, 0, 0, 0][fin.path] : 0;
     for (let k = 0; k < nx * nz; k++) {
       const px = pos[k * 3], pz = pos[k * 3 + 2], m = wallness[k], rd = roadness[k];
       const slope = 1 - nrm.getY(k);
@@ -489,20 +659,23 @@ function create(cv, { fill = false } = {}) {
       const patch = sstep(0.58, 0.72, fbm(px * 0.11 + 90, pz * 0.11 + so));
       c.lerp(dry, patch * 0.55);
       c.lerp(moss, sstep(0.55, 0.75, vnoise(px * 0.5, pz * 0.5 + so)) * 0.35);
-      tmp.lerpColors(dirt, road, fbm(px * 0.6, pz * 0.6));
-      c.lerp(tmp, sstep(0.3, 0.75, rd));
+      tmp.lerpColors(pathA, pathB, fbm(px * 0.6, pz * 0.6));
+      c.lerp(tmp, sstep(0.3, 0.75, rd - fray * (1 - fbm(px * 0.9 + 17, pz * 0.9))));
       if (map.layout) c.lerp(rock, sstep(0.3, 0.65, slope));      // town: a platform's edge is rock
       if (st.hill) {
         c.lerp(top, sstep(0.55, 0.95, m) * 0.85);
         c.lerp(rock, sstep(0.16, 0.42, slope) * sstep(0.02, 0.15, m));
       }
-      const ao = 1 - 0.32 * sstep(0.0, 0.3, m) * (1 - sstep(0.35, 0.8, m)) * (st.hill ? 1 : 1.4);
+      // the darkening where ground meets a wall; not on the town's roads and square, which are laid round them
+      const ao = 1 - 0.32 * sstep(0.0, 0.3, m) * (1 - sstep(0.35, 0.8, m)) * (st.hill ? 1 : 1.4) * (fin ? 1 - sstep(0.3, 0.7, rd) : 1);
       col[k * 3] = c.r * ao; col[k * 3 + 1] = c.g * ao; col[k * 3 + 2] = c.b * ao;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    if (fin) geo.setAttribute('aRoad', new THREE.BufferAttribute(roadness, 1));
+    U.uPave.value = fin ? fin.path : 0;
     const groundTex = paintTexture(fam === 'built' ? 'flag' : fam === 'outdoor' || fam === 'town' ? 'grass' : 'stone');
     textures.push(groundTex);
-    const terrain = new THREE.Mesh(geo, patchMaterial(new THREE.MeshLambertMaterial({ vertexColors: true, map: groundTex }), U, { overlay: true }));
+    const terrain = new THREE.Mesh(geo, patchMaterial(new THREE.MeshLambertMaterial({ vertexColors: true, map: groundTex }), U, { overlay: true, pave: !!fin }));
     terrain.receiveShadow = true;
     terrain.castShadow = !!st.hill;
     root.add(terrain);
@@ -763,22 +936,69 @@ function create(cv, { fill = false } = {}) {
   }
 
   const PLASTER = ['#efe3c8', '#e8d6b0', '#f2e8d5', '#dcc9a5', '#e6d9c0'];
-  const ROOFS = ['#b5532f', '#c46a3c', '#4d6c9a', '#5f7d3c', '#7a5233', '#8e4a3a'];
   const TIMBER = '#6b4a2e', STONE = '#b9ad97';
 
   function buildTown(map, heightAt, root, so) {
     const lay = map.layout, OX = map.ox, OZ = map.oz;
+    const fin = finishOf(lay), look = ROOF_LOOK[fin.roof];
     const mats = new Map();
     /** One material per look. Roof materials fade with uRoofCut. */
-    const mat = (color, { roof = false, emissive = null, ei = 0.8, double = false, flat = false } = {}) => {
-      const key = [color, roof, emissive, ei, double, flat].join('|');
+    const mat = (color, { roof = false, emissive = null, ei = 0.8, double = false, flat = false, map = null } = {}) => {
+      const key = [color, roof, emissive, ei, double, flat, map ? map.uuid : ''].join('|');
       if (!mats.has(key)) {
-        const m = new THREE.MeshLambertMaterial({ color, flatShading: flat, side: double ? THREE.DoubleSide : THREE.FrontSide });
+        const m = new THREE.MeshLambertMaterial({ color, flatShading: flat, side: double ? THREE.DoubleSide : THREE.FrontSide, map });
         if (emissive) { m.emissive.set(emissive); m.emissiveIntensity = ei; }
         mats.set(key, patchMaterial(m, U, { roof }));
       }
       return mats.get(key);
     };
+    const roofTex = roofTexture(fin.roof);
+    world.textures.push(roofTex);
+    /** A roof slope in `colour`, covered as this tier covers its roofs. */
+    const roofMat = (colour) => mat(colour, { roof: true, double: true, map: roofTex });
+    let houseNo = 0;                       // picks each house's shutter colour, in layout order
+    /**
+     * Merge a static group's meshes that share a material into one mesh per material: the whole
+     * town (`town`, below) is merged once it is built, so it is a few dozen draw calls rather than
+     * thousands. Anything marked userData.live (it animates), and everything under it, stays as it
+     * is; so do sprites and instanced meshes. Only position, normal and uv are kept.
+     */
+    function bake(g) {
+      g.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(g.matrixWorld).invert(), byMat = new Map(), done = [];
+      g.traverse(o => {
+        if (!o.isMesh || o.isInstancedMesh) return;
+        for (let p = o; p && p !== g; p = p.parent) if (p.userData.live) return;
+        const geo = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+        geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
+        if (!byMat.has(o.material)) byMat.set(o.material, []);
+        byMat.get(o.material).push(geo);
+        done.push(o);
+      });
+      for (const o of done) { o.parent.remove(o); o.geometry.dispose(); }
+      for (const [m, geos] of byMat) {
+        let n = 0;
+        for (const ge of geos) n += ge.attributes.position.count;
+        const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), uv = m.map ? new Float32Array(n * 2) : null;
+        let at = 0;
+        for (const ge of geos) {
+          const c = ge.attributes.position.count;
+          pos.set(ge.attributes.position.array, at * 3);
+          if (ge.attributes.normal) nrm.set(ge.attributes.normal.array, at * 3);
+          if (uv && ge.attributes.uv) uv.set(ge.attributes.uv.array, at * 2);
+          at += c;
+          ge.dispose();
+        }
+        const merged = new THREE.BufferGeometry();
+        merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        merged.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+        if (uv) merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        const out = new THREE.Mesh(merged, m);
+        out.castShadow = out.receiveShadow = true;
+        g.add(out);
+      }
+      return g;
+    }
     const mesh = (geo, m, x = 0, y = 0, z = 0, ry = 0) => {
       const o = new THREE.Mesh(geo, m);
       o.position.set(x, y, z);
@@ -790,18 +1010,30 @@ function create(cv, { fill = false } = {}) {
     const box = (w, h, d) => new THREE.BoxGeometry(w, h, d).translate(0, h / 2, 0);
     const pick = (rnd, list) => list[Math.floor(rnd() * list.length) % list.length];
     world.sites = []; world.smoke = []; world.flames = []; world.signs = [];
+    const town = new THREE.Group();        // everything static, merged by bake() at the end
+    root.add(town);
 
     // ----- pieces -----
 
-    /** Gable roof with the ridge along local x. Slopes (roof material) and gable ends (wall material). */
+    /**
+     * Gable roof with the ridge along local x. Slopes (roof material, uv in tiles: u along the
+     * ridge, v down the slope) and gable ends (wall material). The covering adds its own: a
+     * thatch roll along the ridge and thick eaves, a ridge board over shingles, a row of ridge
+     * tiles over tile and slate; at City a finial at each end of the ridge.
+     */
     function gable(len, span, h, oh, roofM, wallM) {
       const g = new THREE.Group();
-      const L = len / 2 + oh, S = span / 2 + oh, y0 = h * oh / S, X = len / 2, s2 = span / 2;
+      oh += look.oh;
+      const L = len / 2 + oh, S = span / 2 + oh, y0 = h * oh / S, X = len / 2, s2 = span / 2, sl = Math.hypot(S, h);
       const slopes = new THREE.BufferGeometry();
       slopes.setAttribute('position', new THREE.Float32BufferAttribute([
         -L, 0, S, L, 0, S, L, h, 0, -L, 0, S, L, h, 0, -L, h, 0,
         L, 0, -S, -L, 0, -S, -L, h, 0, L, 0, -S, -L, h, 0, L, h, 0,
       ], 3));
+      slopes.setAttribute('uv', new THREE.Float32BufferAttribute([
+        -L, sl, L, sl, L, 0, -L, sl, L, 0, -L, 0,
+        L, sl, -L, sl, -L, 0, L, sl, -L, 0, L, 0,
+      ], 2));
       slopes.computeVertexNormals();
       const ends = new THREE.BufferGeometry();
       ends.setAttribute('position', new THREE.Float32BufferAttribute([
@@ -810,6 +1042,14 @@ function create(cv, { fill = false } = {}) {
       ], 3));
       ends.computeVertexNormals();
       g.add(mesh(slopes, roofM), mesh(ends, wallM));
+      if (roofM.map) {                     // a covered roof (not a tent or a lean-to): its ridge
+        const rc = new THREE.Color(roofM.color).multiplyScalar(0.78), ridgeM = mat('#' + rc.getHexString(), { roof: true });
+        if (look.ridge === 'roll') g.add(mesh(new THREE.CylinderGeometry(0.15, 0.15, 2 * L, 8).rotateZ(Math.PI / 2), ridgeM, 0, h - 0.05, 0));
+        else if (look.ridge === 'board') g.add(mesh(new THREE.BoxGeometry(2 * L, 0.07, 0.22), ridgeM, 0, h + 0.01, 0));
+        else g.add(mesh(new THREE.CylinderGeometry(0.1, 0.1, 2 * L + 0.04, 8, 1, false, 0, Math.PI).rotateZ(Math.PI / 2), ridgeM, 0, h - 0.02, 0));
+        if (look.ridge === 'roll') for (const sz of [-1, 1]) g.add(mesh(new THREE.BoxGeometry(2 * L, 0.16, 0.14), ridgeM, 0, -0.06, sz * (S - 0.05)));
+        if (fin.quoins) for (const sx of [-1, 1]) g.add(mesh(new THREE.ConeGeometry(0.07, 0.36, 6).translate(0, 0.18, 0), mat('#3a3530', { roof: true }), sx * (L - 0.05), h + 0.06, 0));
+      }
       g.userData.base = y0;                // height of the slope above the eave line at the wall face
       return g;
     }
@@ -828,11 +1068,27 @@ function create(cv, { fill = false } = {}) {
       geo.computeVertexNormals();
       return mesh(geo, roofM);
     }
-    function addWindow(g, x, y, z, ry, glow = false) {
-      const w = new THREE.Group();
-      w.add(mesh(new THREE.BoxGeometry(0.54, 0.62, 0.04), mat('#efe6d2')));
-      const pane = mesh(new THREE.PlaneGeometry(0.42, 0.5), mat('#2b3240', { emissive: '#ffc06a', ei: glow ? 0.95 : 0.18 }), 0, 0, 0.025);
-      w.add(pane);
+    /** A window as this tier makes them (FINISH.window); `shutter` colours painted shutters. */
+    function addWindow(g, x, y, z, ry, glow = false, { shutter = SHUTTERS[0], box: flowerBox = false } = {}) {
+      const w = new THREE.Group(), L = fin.window, frameC = L >= 2 ? '#efe6d2' : '#5a3d24';
+      w.add(mesh(new THREE.BoxGeometry(0.54, 0.62, 0.04), mat(frameC)));
+      const pane = L === 0 && !glow ? mat('#1d1712') : mat('#2b3240', { emissive: '#ffc06a', ei: glow ? 0.95 : 0.18 });
+      w.add(mesh(new THREE.PlaneGeometry(0.42, 0.5), pane, 0, 0, 0.025));
+      if (L >= 2) {                         // a mullion cross
+        w.add(mesh(new THREE.BoxGeometry(0.035, 0.5, 0.02), mat(frameC), 0, 0, 0.035));
+        w.add(mesh(new THREE.BoxGeometry(0.42, 0.035, 0.02), mat(frameC), 0, 0.04, 0.035));
+      }
+      if (L >= 1) {                         // shutters, folded back against the wall
+        const sm = mat(L === 1 ? '#7a5a3a' : shutter);
+        for (const sx of [-1, 1]) w.add(mesh(new THREE.BoxGeometry(0.24, 0.6, 0.03), sm, sx * 0.41, 0, 0.0));
+      }
+      if (L >= 3 && flowerBox) {            // a flower box under it
+        w.add(mesh(new THREE.BoxGeometry(0.62, 0.13, 0.15), mat('#6b4a2e'), 0, -0.38, 0.09));
+        const bloom = ['#e86a9a', '#f2d04a', '#ffffff', '#e8584a'][Math.floor(hash(houseNo, Math.round(x * 10 + y * 7)) * 4)];
+        for (const bx of [-0.2, 0, 0.2]) w.add(mesh(new THREE.SphereGeometry(0.075, 6, 4), mat(bloom), bx, -0.27, 0.1));
+        w.add(mesh(new THREE.BoxGeometry(0.58, 0.06, 0.12), mat('#4f8f3a'), 0, -0.3, 0.09));
+      }
+      if (L >= 4) for (const sy of [-1, 1]) w.add(mesh(new THREE.BoxGeometry(0.7, 0.07, 0.1), mat('#ddd3c0'), 0, sy * 0.35, 0.03));
       w.position.set(x, y, z);
       w.rotation.y = ry;
       g.add(w);
@@ -841,65 +1097,163 @@ function create(cv, { fill = false } = {}) {
      * Walls with a door gap on +z, a plank floor, timber corners, windows, and (unless `bare`)
      * a gable roof and chimneys. Returns { group, top, chimneys: [Vector3 local] }.
      */
+    /**
+     * Walls with a door gap on +z, a plank floor, windows, and (unless `bare`) a gable roof and
+     * chimneys, finished as this tier finishes a house (FINISH): a stone plinth, timber from corner
+     * posts up to half-timbering on plastered walls, quoins at City, a door frame, canopy, step
+     * and lantern (no canopy or lantern where the caller builds a porch, `o.porch`). `o.roof` is the
+     * roof's colour. Returns { group, top, chimneys: [Vector3 local] }.
+     */
     function house(w, d, o) {
-      const g = new THREE.Group(), t = 0.18, H = o.wallH, storeys = o.storeys || 1;
+      const g = new THREE.Group(), t = 0.18, H = o.wallH, storeys = o.storeys || 1, sh = H / storeys;
       const wallM = mat(o.plaster), timM = mat(o.timber || TIMBER);
+      const plastered = new THREE.Color(o.plaster).getHSL({}).l > 0.55;
+      const shutter = SHUTTERS[Math.floor(hash(++houseNo, 41) * SHUTTERS.length)];
       g.add(mesh(new THREE.PlaneGeometry(w - 0.3, d - 0.3).rotateX(-Math.PI / 2), mat(o.floor || '#9c7a55'), 0, 0.04, 0));
-      g.add(mesh(box(w, H, t), wallM, 0, 0, -d / 2 + t / 2));
-      g.add(mesh(box(t, H, d), wallM, -w / 2 + t / 2, 0, 0));
-      g.add(mesh(box(t, H, d), wallM, w / 2 - t / 2, 0, 0));
       const side = Math.max(0.1, (w - 1.1) / 2);
-      g.add(mesh(box(side, H, t), wallM, -(w / 2 - side / 2), 0, d / 2 - t / 2));
-      g.add(mesh(box(side, H, t), wallM, w / 2 - side / 2, 0, d / 2 - t / 2));
+      // the walls, and the plinth under them, both open at the door
+      const walls = (m, y, hgt, out) => {
+        g.add(mesh(box(w + out, hgt, t + out), m, 0, y, -d / 2 + t / 2));
+        g.add(mesh(box(t + out, hgt, d + out), m, -w / 2 + t / 2, y, 0));
+        g.add(mesh(box(t + out, hgt, d + out), m, w / 2 - t / 2, y, 0));
+        g.add(mesh(box(side + out / 2, hgt, t + out), m, -(w / 2 - side / 2) - out / 4, y, d / 2 - t / 2));
+        g.add(mesh(box(side + out / 2, hgt, t + out), m, w / 2 - side / 2 + out / 4, y, d / 2 - t / 2));
+      };
+      walls(wallM, 0, H, 0);
+      if (fin.plinth) walls(mat('#a39882'), 0, fin.plinth, 0.1);
       if (H > 1.3) g.add(mesh(box(1.1, H - 1.25, t), wallM, 0, 1.25, d / 2 - t / 2));
       g.add(mesh(new THREE.BoxGeometry(1.24, 0.1, t + 0.08), timM, 0, 1.25, d / 2 - t / 2));
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.16, H + 0.04, 0.16), timM, sx * (w / 2 - 0.06), 0, sz * (d / 2 - 0.06)));
-      for (let k = 1; k <= storeys; k++) {
-        const y = H * k / storeys - 0.05;
-        for (const sz of [-1, 1]) g.add(mesh(new THREE.BoxGeometry(w + 0.04, 0.1, 0.06), timM, 0, y, sz * (d / 2 + 0.01)));
-        for (const sx of [-1, 1]) g.add(mesh(new THREE.BoxGeometry(0.06, 0.1, d + 0.04), timM, sx * (w / 2 + 0.01), y, 0));
+      // a timber on a face, from (ua, ya) to (ub, yb) in that face's (along, up) coordinates
+      const faces = [
+        { id: 'front', len: w, at: (u, y) => [u, y, d / 2 + 0.03], ry: 0 },
+        { id: 'back', len: w, at: (u, y) => [-u, y, -d / 2 - 0.03], ry: Math.PI },
+        { id: 'side', len: d, at: (u, y) => [w / 2 + 0.03, y, -u], ry: Math.PI / 2 },
+        { id: 'side', len: d, at: (u, y) => [-w / 2 - 0.03, y, u], ry: -Math.PI / 2 },
+      ];
+      const beam = (f, ua, ya, ub, yb, thick = 0.07) => {
+        const b = mesh(new THREE.BoxGeometry(Math.hypot(ub - ua, yb - ya) + thick, thick, 0.05), timM);
+        b.position.set(...f.at((ua + ub) / 2, (ya + yb) / 2));
+        b.rotation.set(0, f.ry, Math.atan2(yb - ya, ub - ua), 'YXZ');
+        g.add(b);
+      };
+      // where the windows go, per face and storey (in that face's along coordinate)
+      const nWin = Math.max(1, Math.floor(w / 2.3));
+      const xs = Array.from({ length: nWin }, (_, i) => (i - (nWin - 1) / 2) * (w / nWin));
+      const winAt = (f, k) => f.id === 'front' ? xs.filter(wx => k > 0 || Math.abs(wx) > 1.0)
+        : f.id === 'back' ? xs.map(wx => -wx) : d >= 2.6 ? [0] : [];
+      const winHalf = fin.window >= 1 ? 0.56 : 0.34;           // a window and its shutters, either side of its middle
+      // corners: dressed stone quoins on a plastered house at City, timber posts otherwise
+      if (fin.quoins && plastered) {
+        const qm = mat('#ddd3c0');
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (let y = fin.plinth, i = 0; y < H - 0.1; y += 0.3, i++) {
+          const long = i % 2 ? [0.4, 0.24] : [0.24, 0.4];
+          g.add(mesh(box(long[0], 0.24, long[1]), qm, sx * (w / 2 - long[0] / 2 + 0.03), y, sz * (d / 2 - long[1] / 2 + 0.03)));
+        }
+      } else {
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.16, H + 0.04, 0.16), timM, sx * (w / 2 - 0.06), 0, sz * (d / 2 - 0.06)));
+      }
+      if (fin.timber >= 1) for (let k = 1; k <= storeys; k++) for (const f of faces) beam(f, -f.len / 2, sh * k - 0.05, f.len / 2, sh * k - 0.05, 0.1);
+      // half-timbering on plaster: studs between the windows and a brace in each clear end bay
+      if (fin.timber >= 2 && plastered) for (const f of faces) for (let k = 0; k < storeys; k++) {
+        const y0 = sh * k + (k ? 0 : fin.plinth), y1 = sh * (k + 1) - 0.1, wins = winAt(f, k);
+        const m = Math.max(2, Math.round(f.len / 1.1)), bay = f.len / m;
+        const clear = (u0, u1) => wins.every(wx => wx + winHalf < Math.min(u0, u1) || wx - winHalf > Math.max(u0, u1))
+          && !(f.id === 'front' && k === 0 && Math.min(u0, u1) < 0.7 && Math.max(u0, u1) > -0.7);
+        for (let j = 1; j < m; j++) { const u = -f.len / 2 + bay * j; if (clear(u - 0.05, u + 0.05)) beam(f, u, y0, u, y1); }
+        for (const e of [-1, 1]) {
+          const ua = e * (f.len / 2 - 0.1), ub = e * (f.len / 2 - bay);
+          if (clear(ua, ub)) beam(f, ua, y0, ub, y0 + (y1 - y0) * 0.75);
+        }
       }
       for (let k = 0; k < storeys; k++) {
-        const y = H * (k + 0.55) / storeys, n = Math.max(1, Math.floor(w / 2.3));
-        for (let i = 0; i < n; i++) {
-          const wx = (i - (n - 1) / 2) * (w / n);
-          addWindow(g, wx, y, -d / 2 - 0.02, Math.PI, o.glow);
-          if (k > 0 || Math.abs(wx) > 1.0) addWindow(g, wx, y, d / 2 + 0.02, 0, o.glow);
-        }
-        if (d >= 2.6) for (const sx of [-1, 1]) addWindow(g, sx * (w / 2 + 0.02), y, 0, sx * Math.PI / 2, o.glow);
+        const y = H * (k + 0.55) / storeys;
+        for (const wx of winAt(faces[1], k)) addWindow(g, -wx, y, -d / 2 - 0.02, Math.PI, o.glow, { shutter });
+        for (const wx of winAt(faces[0], k)) addWindow(g, wx, y, d / 2 + 0.02, 0, o.glow, { shutter, box: true });
+        if (d >= 2.6) for (const sx of [-1, 1]) addWindow(g, sx * (w / 2 + 0.02), y, 0, sx * Math.PI / 2, o.glow, { shutter, box: true });
+      }
+      // the door: a frame, then a canopy over it, then a step and a lantern beside it
+      const dz = d / 2;
+      if (fin.door >= 1) for (const sx of [-1, 1]) g.add(mesh(box(0.1, 1.25, t + 0.08), timM, sx * 0.6, 0, dz - t / 2));
+      if (fin.door >= 2 && !o.bare && !o.porch) {
+        const c = mesh(new THREE.BoxGeometry(1.5, 0.06, 0.66), roofMat(o.roof), 0, 1.52, dz + 0.3);
+        c.rotation.x = 0.32;
+        g.add(c);
+        for (const sx of [-1, 1]) beam(faces[0], sx * 0.62, 1.12, sx * 0.62, 1.4, 0.06);
+      }
+      if (fin.door >= 3) g.add(mesh(box(1.3, 0.12, 0.44), mat('#b9ad97'), 0, 0, dz + 0.22));
+      if (fin.door >= 3 && !o.porch && !o.glow) {          // a tavern hangs its own lanterns (tavern())
+        g.add(mesh(new THREE.BoxGeometry(0.06, 0.06, 0.22), mat('#3a3530'), 0.85, 1.3, dz + 0.11));
+        g.add(mesh(new THREE.BoxGeometry(0.15, 0.2, 0.15), mat('#ffd38a', { emissive: '#ffb04a', ei: 1.1 }), 0.85, 1.15, dz + 0.2));
       }
       const chimneys = [];
       if (!o.bare) {
-        const roofM = mat(o.roof, { roof: true, double: true });
-        g.add(roofOver(w, d, H, o.roofH, o.oh == null ? 0.3 : o.oh, roofM, mat(o.plaster, { roof: true })));
+        g.add(roofOver(w, d, H, o.roofH, o.oh == null ? 0.3 : o.oh, roofMat(o.roof), mat(o.plaster, { roof: true })));
+        const tiled = fin.roof === 'tile' || fin.roof === 'slate';
         for (let i = 0; i < (o.chimneys || 0); i++) {
           const cx = (i ? -1 : 1) * w * 0.27, cz = -d * 0.18, ch = H + o.roofH * 0.85 + 0.35;
           g.add(mesh(box(0.38, ch, 0.38), mat(STONE, { roof: true }), cx, 0, cz));
-          chimneys.push(new THREE.Vector3(cx, ch + 0.1, cz));
+          let top = ch;
+          if (tiled) { g.add(mesh(box(0.5, 0.08, 0.5), mat('#cfc4ad', { roof: true }), cx, ch, cz)); top += 0.08; }
+          if (fin.quoins) { for (const px of [-0.09, 0.09]) g.add(mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.2, 8).translate(0, 0.1, 0), mat('#b5532f', { roof: true }), cx + px, top, cz)); top += 0.2; }
+          chimneys.push(new THREE.Vector3(cx, top + 0.1, cz));
         }
       }
       return { group: g, top: H + (o.bare ? 0 : o.roofH), chimneys };
     }
-    /** A low surround along the footprint edge with a gap at the door: fence, hedge or stone. */
+    /**
+     * A low surround along the footprint edge with a gap at the door: fence, hedge or stone. A fence
+     * is this tier's (FINISH.fence): leaning stakes, posts and rails, white pickets, or iron railing
+     * between stone pillars. A stone wall is rough until Town, then capped; a hedge has clipped
+     * balls at its corners at City.
+     */
     function surround(w, d, kind, rnd) {
       const g = new THREE.Group();
-      const h = kind === 'stone' ? 0.55 : 0.75;
-      const m = mat(kind === 'stone' ? STONE : kind === 'hedge' ? '#4f7f33' : '#8a6542');
+      const style = kind === 'fence' ? fin.fence : kind;
+      const h = kind === 'stone' ? 0.55 : style === 'railing' ? 0.85 : 0.75;
+      const m = mat(kind === 'stone' ? STONE : kind === 'hedge' ? '#4f7f33' : style === 'pickets' ? '#efe9dc' : style === 'railing' ? '#2f2f36' : '#8a6542');
       const edges = [
         [-w / 2, -d / 2, w / 2, -d / 2], [-w / 2, d / 2, -0.6, d / 2], [0.6, d / 2, w / 2, d / 2],
         [-w / 2, -d / 2, -w / 2, d / 2], [w / 2, -d / 2, w / 2, d / 2],
       ];
+      // posts every `step` tiles along an edge, ends included
+      const along = (ax, az, bx, bz, step, fn) => {
+        const len = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(len / step));
+        for (let k = 0; k <= n; k++) fn(ax + (bx - ax) * k / n, az + (bz - az) * k / n, k, n);
+      };
       for (const [ax, az, bx, bz] of edges) {
         const len = Math.hypot(bx - ax, bz - az), mx = (ax + bx) / 2, mz = (az + bz) / 2, ry = Math.atan2(bz - az, bx - ax);
-        if (kind === 'fence') {
-          for (let k = 0; k <= Math.round(len); k++) {
-            const f = len ? k / Math.round(len || 1) : 0;
-            g.add(mesh(box(0.1, h, 0.1), m, ax + (bx - ax) * f, 0, az + (bz - az) * f));
-          }
-          for (const y of [0.3, 0.6]) g.add(mesh(new THREE.BoxGeometry(len, 0.06, 0.05), m, mx, y, mz, -ry));
+        const rail = (y, hgt = 0.06, dep = 0.05, rm = m) => g.add(mesh(new THREE.BoxGeometry(len, hgt, dep), rm, mx, y, mz, -ry));
+        if (style === 'stakes') {
+          along(ax, az, bx, bz, 0.45, (x, z) => {
+            const s = mesh(box(0.08, 0.6 + rnd() * 0.25, 0.08), m, x, 0, z);
+            s.rotation.set((rnd() - 0.5) * 0.18, 0, (rnd() - 0.5) * 0.18);
+            g.add(s);
+          });
+          rail(0.42);
+        } else if (style === 'rails') {
+          along(ax, az, bx, bz, 1, (x, z) => g.add(mesh(box(0.1, h, 0.1), m, x, 0, z)));
+          rail(0.3); rail(0.6);
+        } else if (style === 'pickets') {
+          along(ax, az, bx, bz, 0.26, (x, z) => {
+            g.add(mesh(box(0.07, 0.68, 0.05), m, x, 0, z));
+            g.add(mesh(new THREE.ConeGeometry(0.05, 0.1, 4).translate(0, 0.73, 0), m, x, 0, z));
+          });
+          rail(0.22, 0.06, 0.04); rail(0.55, 0.06, 0.04);
+        } else if (style === 'railing') {
+          const pillar = mat('#cfc4ad');
+          along(ax, az, bx, bz, 0.2, (x, z, k, n) => { if (k > 0 && k < n) g.add(mesh(box(0.03, h - 0.05, 0.03), m, x, 0, z)); });
+          along(ax, az, bx, bz, 2.2, (x, z) => {
+            g.add(mesh(box(0.26, h + 0.12, 0.26), pillar, x, 0, z));
+            g.add(mesh(box(0.32, 0.07, 0.32), pillar, x, h + 0.12, z));
+          });
+          rail(0.08, 0.05, 0.05); rail(h - 0.05, 0.05, 0.05);
         } else {
           g.add(mesh(new THREE.BoxGeometry(len + 0.2, h, kind === 'hedge' ? 0.45 : 0.3).translate(0, h / 2, 0), m, mx, 0, mz, -ry));
+          if (kind === 'stone' && (fin.terrace === 'coping' || fin.terrace === 'balustrade')) rail(h + 0.04, 0.08, 0.42, mat('#d6ccb8'));
         }
+      }
+      if (kind === 'hedge' && fin.quoins) for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        g.add(mesh(new THREE.SphereGeometry(0.32, 12, 8), m, sx * w / 2, h + 0.22, sz * d / 2));
       }
       return g;
     }
@@ -907,6 +1261,7 @@ function create(cv, { fill = false } = {}) {
     function flame(g, x, y, z, colour = '#ffb347', size = 1) {
       const f = mesh(new THREE.ConeGeometry(0.16 * size, 0.42 * size, 8).translate(0, 0.21 * size, 0), mat(colour, { emissive: colour, ei: 1.6 }), x, y, z);
       f.castShadow = false;
+      f.userData.live = true;
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: shared.glowTex, color: colour, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.55 }));
       glow.position.set(x, y + 0.25 * size, z);
       glow.scale.setScalar(1.6 * size);
@@ -944,7 +1299,10 @@ function create(cv, { fill = false } = {}) {
     // ----- lodgings -----
     function lodging(s, rnd) {
       const w = s.w, d = s.h, bare = !!s.site;
-      const plaster = pick(rnd, PLASTER), roof = pick(rnd, ROOFS);
+      // an ordinary roof is in this tier's covering (FINISH.roof); the barracks, manor, salon and
+      // crown hall keep their own colours once roofs are tile or slate, which come in colours
+      const plaster = pick(rnd, PLASTER), roof = pick(rnd, look.colours);
+      const own = (c) => fin.roof === 'tile' || fin.roof === 'slate' ? c : roof;
       switch (s.type) {
         case 'tent': {
           const g = new THREE.Group();
@@ -956,21 +1314,21 @@ function create(cv, { fill = false } = {}) {
           g.add(mesh(box(0.08, 2.15, 0.08), mat(TIMBER)));
           return { group: g, top: 2.1, chimneys: [] };
         }
-        case 'bunkhouse': return house(w, d, { wallH: 1.4, roofH: 0.9, plaster: '#9a7550', roof: '#6e4a2c', bare });
-        case 'longhouse': return house(w, d, { wallH: 1.05, roofH: 1.8, oh: 0.5, plaster: '#8a6a48', roof: '#c9a55a', chimneys: 1, bare });
+        case 'bunkhouse': return house(w, d, { wallH: 1.4, roofH: 0.9, plaster: '#9a7550', roof, bare });
+        case 'longhouse': return house(w, d, { wallH: 1.05, roofH: 1.8, oh: 0.5, plaster: '#8a6a48', roof, chimneys: 1, bare });
         case 'barracks': {
-          const h = house(w, d, { wallH: 1.65, roofH: 1.1, plaster: STONE, roof: '#4d5f7a', floor: '#8f8a80', bare });
+          const h = house(w, d, { wallH: 1.65, roofH: 1.1, plaster: STONE, roof: own('#4d5f7a'), floor: '#8f8a80', bare });
           h.group.add(mesh(box(0.08, 3.2, 0.08), mat(TIMBER), w / 2 + 0.4, 0, d / 2));
-          h.group.add(mesh(new THREE.PlaneGeometry(0.7, 0.5), mat(roof, { double: true }), w / 2 + 0.77, 2.85, d / 2));
+          h.group.add(mesh(new THREE.PlaneGeometry(0.7, 0.5), mat(pick(rnd, SHUTTERS), { double: true }), w / 2 + 0.77, 2.85, d / 2));
           return h;
         }
         case 'cottages': {
           // a terrace of two cottages under two roofs of different colours
           const h = house(w, d, { wallH: 1.45, roofH: 1.2, plaster, roof, bare: true });
           if (!bare) {
-            const r2 = pick(rnd, ROOFS.filter(c => c !== roof));
+            const r2 = pick(rnd, look.colours.filter(c => c !== roof));
             for (const [sx, rc] of [[-1, roof], [1, r2]]) {
-              const half = roofOver(w / 2, d, 1.45, 1.2, 0.25, mat(rc, { roof: true, double: true }), mat(plaster, { roof: true }));
+              const half = roofOver(w / 2, d, 1.45, 1.2, 0.25, roofMat(rc), mat(plaster, { roof: true }));
               half.position.x = sx * w / 4;
               h.group.add(half);
               const cx = sx * w / 4, ch = 1.45 + 1.15;
@@ -982,7 +1340,7 @@ function create(cv, { fill = false } = {}) {
           return h;
         }
         case 'manor': {
-          const h = house(w, d, { wallH: 2.5, storeys: 2, roofH: 1.4, plaster: '#efe6d6', roof: '#4d6c9a', chimneys: 2, bare });
+          const h = house(w, d, { wallH: 2.5, storeys: 2, roofH: 1.4, plaster: '#efe6d6', roof: own('#4d6c9a'), chimneys: 2, porch: true, bare });
           for (const sx of [-1, 1]) h.group.add(mesh(new THREE.CylinderGeometry(0.1, 0.12, 1.4, 10).translate(0, 0.7, 0), mat('#efe6d2'), sx * 0.7, 0, d / 2 + 0.9));
           h.group.add(mesh(new THREE.BoxGeometry(1.8, 0.12, 1.2), mat('#4d6c9a', { roof: true }), 0, 1.46, d / 2 + 0.55));
           return h;
@@ -1001,10 +1359,10 @@ function create(cv, { fill = false } = {}) {
           }
           return { group: g, top: 3.4, chimneys: [] };
         }
-        case 'alehouse': return tavern(house(w, d, { wallH: 1.4, roofH: 1.2, oh: 0.45, plaster: '#c8a878', timber: '#5a3a22', roof: '#b8944a', chimneys: 1, glow: true, bare }), w, d, '#c9963f', bare, 0);
-        case 'inn': return tavern(house(w, d, { wallH: 2.4, storeys: 2, roofH: 1.3, plaster: '#efe3c8', roof: '#a8452f', chimneys: 2, glow: true, bare }), w, d, '#5f8fc9', bare, 0);
-        case 'salon': return tavern(house(w, d, { wallH: 1.8, roofH: 1.0, plaster: '#f4efe4', timber: '#8a8f9a', roof: '#4d6c9a', glow: true, bare }), w, d, '#a45fc9', bare, 2);
-        case 'crownhall': return tavern(house(w, d, { wallH: 2.8, storeys: 2, roofH: 1.5, plaster: STONE, timber: '#7a6a4a', roof: '#3f4a6b', chimneys: 2, glow: true, bare }), w, d, '#e0b84a', bare, 4);
+        case 'alehouse': return tavern(house(w, d, { wallH: 1.4, roofH: 1.2, oh: 0.45, plaster: '#c8a878', timber: '#5a3a22', roof, chimneys: 1, glow: true, bare }), w, d, '#c9963f', bare, 0);
+        case 'inn': return tavern(house(w, d, { wallH: 2.4, storeys: 2, roofH: 1.3, plaster: '#efe3c8', roof, chimneys: 2, glow: true, bare }), w, d, '#5f8fc9', bare, 0);
+        case 'salon': return tavern(house(w, d, { wallH: 1.8, roofH: 1.0, plaster: '#f4efe4', timber: '#8a8f9a', roof: own('#4d6c9a'), glow: true, porch: true, bare }), w, d, '#a45fc9', bare, 2);
+        case 'crownhall': return tavern(house(w, d, { wallH: 2.8, storeys: 2, roofH: 1.5, plaster: STONE, timber: '#7a6a4a', roof: own('#3f4a6b'), chimneys: 2, glow: true, porch: true, bare }), w, d, '#e0b84a', bare, 4);
         default: return house(w, d, { wallH: 1.4, roofH: 1.0, plaster, roof, bare });
       }
     }
@@ -1018,7 +1376,7 @@ function create(cv, { fill = false } = {}) {
         case 'farm': {
           g.add(surround(w, d, 'fence', rnd));
           const bw = Math.min(3.2, w * 0.42), bd = Math.min(2.6, d * 0.6);
-          put(house(bw, bd, { wallH: 1.5, roofH: 1.1, plaster: '#a8452f', timber: '#e8dcc0', roof: '#5a3a28' }), -w / 2 + bw / 2 + 0.4, -d / 2 + bd / 2 + 0.4);
+          put(house(bw, bd, { wallH: 1.5, roofH: 1.1, plaster: '#a8452f', timber: '#e8dcc0', roof: pick(rnd, look.colours) }), -w / 2 + bw / 2 + 0.4, -d / 2 + bd / 2 + 0.4);
           const x0 = -w / 2 + bw + 0.9, x1 = w / 2 - 0.5, crop = pick(rnd, ['#7fae3e', '#c9b24a', '#9bbf4a']);
           const tufts = [];
           for (let z = -d / 2 + 0.6; z <= d / 2 - 0.6; z += 0.6) {
@@ -1059,11 +1417,11 @@ function create(cv, { fill = false } = {}) {
               if (rnd() < 0.5) g.add(mesh(new THREE.SphereGeometry(0.07, 6, 4), mat(pick(rnd, flowers)), x + 0.08, 0.6, z + 0.05));
             }
           }
-          put(house(1.6, 1.6, { wallH: 1.2, roofH: 0.6, plaster: '#8a6a48', roof: '#5f7d3c' }), -w / 2 + 1.1, -d / 2 + 1.1);
+          put(house(1.6, 1.6, { wallH: 1.2, roofH: 0.6, plaster: '#8a6a48', roof: pick(rnd, look.colours) }), -w / 2 + 1.1, -d / 2 + 1.1);
           break;
         }
         case 'kitchen': {
-          put(house(w - 0.4, d - 0.4, { wallH: 1.5, roofH: 1.2, plaster: pick(rnd, PLASTER), roof: '#b5532f', chimneys: 1 }), 0, 0);
+          put(house(w - 0.4, d - 0.4, { wallH: 1.5, roofH: 1.2, plaster: pick(rnd, PLASTER), roof: pick(rnd, look.colours), chimneys: 1 }), 0, 0);
           break;
         }
         case 'smithy': {
@@ -1110,7 +1468,7 @@ function create(cv, { fill = false } = {}) {
           break;
         }
         default:
-          put(house(w - 0.4, d - 0.4, { wallH: 1.5, roofH: 1.0, plaster: pick(rnd, PLASTER), roof: pick(rnd, ROOFS) }), 0, 0);
+          put(house(w - 0.4, d - 0.4, { wallH: 1.5, roofH: 1.0, plaster: pick(rnd, PLASTER), roof: pick(rnd, look.colours) }), 0, 0);
       }
       return { group: g, top, chimneys };
     }
@@ -1135,6 +1493,7 @@ function create(cv, { fill = false } = {}) {
       const rise = new THREE.Group();
       rise.add(lodging(s, rnd).group);
       rise.position.y = 0.14;
+      rise.userData.live = true;
       g.add(rise);
       const H = s.type === 'manor' ? 2.5 : s.type === 'tent' ? 2.1 : 1.7, pole = mat('#a7845a');
       const n = Math.max(1, Math.round(w / 1.5)), m = Math.max(1, Math.round(d / 1.5));
@@ -1155,7 +1514,7 @@ function create(cv, { fill = false } = {}) {
       const g = built.group;
       g.position.set(x, heightAt(x, z), z);
       g.rotation.y = s.rot;
-      root.add(g);
+      town.add(g);                         // a construction site's rising part is marked live
       g.updateMatrixWorld(true);
       for (const c of built.chimneys) addSmoke(g.localToWorld(c.clone()), s.key === 'smithy' ? 0.55 : 0.85);
       // sign over the door
@@ -1170,29 +1529,173 @@ function create(cv, { fill = false } = {}) {
       world.signs.push({ mesh: b, icon, full });
     }
 
-    // ----- the floors: retaining walls at each platform's foot, stairs between floors, plazas -----
-    floorsOf(lay, OX, OZ, heightAt, root, mat, mesh, box);
+    /**
+     * A light as this tier puts them up: a torch (a stake and a flame) until there are street lamps
+     * (FINISH.lamps), then a timber post with a lantern (Village), an iron post with a capped
+     * lantern on a stone foot (Town), an iron post with two lanterns on a crossbar (City). `glow`
+     * adds a glow sprite at each lantern.
+     */
+    function lampPost(glow = true) {
+      const g = new THREE.Group(), lit = mat('#ffd38a', { emissive: '#ffb04a', ei: 1.2 }), iron = mat('#2f2f36');
+      const lanterns = [];
+      if (!fin.lamps) {
+        g.add(mesh(box(0.07, 1.45, 0.07), mat(TIMBER)));
+        flame(g, 0, 1.45, 0, '#ffb347', 0.7);
+        return g;
+      }
+      if (fin.path <= 2) {
+        g.add(mesh(box(0.1, 1.9, 0.1), mat(TIMBER)));
+        g.add(mesh(new THREE.BoxGeometry(0.24, 0.28, 0.24), lit, 0, 2.02, 0));
+        g.add(mesh(new THREE.ConeGeometry(0.21, 0.16, 4).rotateY(Math.PI / 4).translate(0, 2.24, 0), mat('#3a3530')));
+        lanterns.push([0, 2.02]);
+      } else {
+        g.add(mesh(box(0.22, 0.24, 0.22), mat('#b9ad97')));
+        g.add(mesh(new THREE.CylinderGeometry(0.035, 0.05, 2.0, 8).translate(0, 1.0, 0), iron));
+        const arms = fin.path === 3 ? [0] : [-0.38, 0.38];
+        if (arms.length > 1) g.add(mesh(new THREE.BoxGeometry(0.86, 0.05, 0.05), iron, 0, 1.98, 0));
+        for (const ax of arms) {
+          const y = arms.length > 1 ? 1.78 : 2.12;
+          g.add(mesh(new THREE.BoxGeometry(0.2, 0.26, 0.2), lit, ax, y, 0));
+          g.add(mesh(new THREE.ConeGeometry(0.18, 0.18, 4).rotateY(Math.PI / 4).translate(0, y + 0.22, 0), iron));
+          lanterns.push([ax, y]);
+        }
+      }
+      if (glow) for (const [x, y] of lanterns) {
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: shared.glowTex, color: '#ffc46a', blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.45 }));
+        sp.position.set(x, y, 0); sp.scale.setScalar(1.3);
+        g.add(sp);
+      }
+      return g;
+    }
 
-    // ----- the square: fountain and lamps -----
+    // ----- the floors: retaining walls at each platform's foot, stairs between floors, plazas -----
+    floorsOf(lay, OX, OZ, heightAt, root, mat, mesh, box, { fin, lampPost, town });
+
+    // ----- the square: what stands in it (FINISH.square), lights round it, benches from Town -----
     {
       const gy = heightAt(OX, OZ), stone = mat('#cfc4ad');
+      const waterM = new THREE.MeshLambertMaterial({ color: '#5fb6d8', emissive: '#1f5f7a', emissiveIntensity: 0.6 });
       const f = new THREE.Group();
-      f.add(mesh(new THREE.CylinderGeometry(1.15, 1.25, 0.35, 28, 1, true).translate(0, 0.175, 0), mat('#cfc4ad', { double: true })));
-      const water = mesh(new THREE.CircleGeometry(1.1, 28).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: '#5fb6d8', emissive: '#1f5f7a', emissiveIntensity: 0.6 }), 0, 0.3, 0);
-      f.add(water, mesh(new THREE.CylinderGeometry(0.14, 0.2, 0.9, 12).translate(0, 0.45, 0), stone), mesh(new THREE.CylinderGeometry(0.42, 0.18, 0.18, 16).translate(0, 0.95, 0), stone));
+      /** A round stone basin of radius r and height h standing at y, with water in it. */
+      const basin = (r, h, y = 0) => {
+        f.add(mesh(new THREE.CylinderGeometry(r, r + 0.1, h, 28, 1, true).translate(0, y + h / 2, 0), mat('#cfc4ad', { double: true })));
+        f.add(mesh(new THREE.TorusGeometry(r + 0.02, 0.07, 6, 28).rotateX(Math.PI / 2), stone, 0, y + h, 0));
+        f.add(mesh(new THREE.CircleGeometry(r - 0.03, 28).rotateX(-Math.PI / 2), waterM, 0, y + h - 0.07, 0));
+      };
+      switch (fin.square) {
+        case 'fire': {                       // a ring of stones round a fire on crossed logs
+          for (let i = 0; i < 9; i++) {
+            const a = i / 9 * Math.PI * 2;
+            f.add(mesh(new THREE.DodecahedronGeometry(0.2, 0), mat('#8f877a', { flat: true }), Math.cos(a) * 0.75, 0.1, Math.sin(a) * 0.75));
+          }
+          for (let i = 0; i < 3; i++) f.add(mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.8, 6).rotateZ(Math.PI / 2), mat('#5a3d24'), 0, 0.08 + i * 0.05, 0, i * 1.05));
+          flame(f, 0, 0.12, 0, '#ff9a3a', 1.4);
+          break;
+        }
+        case 'well': {                       // a stone well with a winding beam under a small roof
+          f.add(mesh(new THREE.CylinderGeometry(0.75, 0.8, 0.7, 20, 1, true).translate(0, 0.35, 0), mat('#a39882', { double: true })));
+          f.add(mesh(new THREE.TorusGeometry(0.77, 0.08, 6, 20).rotateX(Math.PI / 2), mat('#a39882'), 0, 0.7, 0));
+          f.add(mesh(new THREE.CircleGeometry(0.72, 20).rotateX(-Math.PI / 2), mat('#1f2a30'), 0, 0.3, 0));
+          for (const sx of [-1, 1]) f.add(mesh(box(0.1, 1.7, 0.1), mat(TIMBER), sx * 0.8, 0, 0));
+          f.add(mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.7, 8).rotateZ(Math.PI / 2), mat(TIMBER), 0, 1.3, 0));
+          f.add(roofOver(1.9, 1.1, 1.7, 0.55, 0.12, roofMat(look.colours[0]), mat(TIMBER, { roof: true })));
+          f.add(mesh(new THREE.CylinderGeometry(0.12, 0.1, 0.22, 10), mat('#6b4a2e'), 0.3, 0.95, 0));
+          break;
+        }
+        case 'basin': basin(1.15, 0.35); break;
+        case 'fountain': {                   // the basin, a column and a bowl on it
+          basin(1.15, 0.35);
+          f.add(mesh(new THREE.CylinderGeometry(0.14, 0.2, 0.9, 12).translate(0, 0.45, 0), stone));
+          f.add(mesh(new THREE.CylinderGeometry(0.42, 0.18, 0.18, 16).translate(0, 0.95, 0), stone));
+          f.add(mesh(new THREE.CircleGeometry(0.37, 16).rotateX(-Math.PI / 2), waterM, 0, 1.12, 0));
+          break;
+        }
+        case 'tiered': {                     // a stepped base, a wider basin, two bowls up a column, a gilt ball
+          f.add(mesh(new THREE.CylinderGeometry(1.62, 1.7, 0.14, 32).translate(0, 0.07, 0), mat('#d6ccb8')));
+          basin(1.38, 0.4, 0.14);
+          f.add(mesh(new THREE.CylinderGeometry(0.16, 0.24, 1.6, 12).translate(0, 0.94, 0), stone));
+          for (const [y, r] of [[1.0, 0.64], [1.7, 0.36]]) {
+            f.add(mesh(new THREE.CylinderGeometry(r, r * 0.35, 0.2, 20).translate(0, y, 0), stone));
+            f.add(mesh(new THREE.CircleGeometry(r - 0.05, 20).rotateX(-Math.PI / 2), waterM, 0, y + 0.09, 0));
+          }
+          f.add(mesh(new THREE.CylinderGeometry(0.07, 0.11, 0.45, 10).translate(0, 1.92, 0), stone));
+          f.add(mesh(new THREE.SphereGeometry(0.14, 12, 8), mat('#e0b84a', { emissive: '#7a5a10', ei: 0.35 }), 0, 2.4, 0));
+          break;
+        }
+      }
       f.position.set(OX, gy, OZ);
-      root.add(f);
+      town.add(f);
       for (let i = 0; i < 6; i++) {
         const a = (i + 0.5) / 6 * Math.PI * 2, lx = OX + Math.sin(a) * (lay.square.r + 0.4), lz = OZ - Math.cos(a) * (lay.square.r + 0.4);
-        const lamp = new THREE.Group();
-        lamp.add(mesh(box(0.08, 1.9, 0.08), mat('#3a3530')));
-        lamp.add(mesh(new THREE.BoxGeometry(0.26, 0.3, 0.26), mat('#ffd38a', { emissive: '#ffb04a', ei: 1.2 }), 0, 2.0, 0));
-        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: shared.glowTex, color: '#ffc46a', blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.45 }));
-        glow.position.y = 2.0; glow.scale.setScalar(1.4);
-        lamp.add(glow);
+        const lamp = lampPost();
         lamp.position.set(lx, heightAt(lx, lz), lz);
-        root.add(lamp);
+        town.add(lamp);
       }
+      // benches facing the middle on bearings no road comes in on, and from City a planter behind each
+      if (fin.path >= 3) {
+        const inAt = [];
+        for (const r of lay.roads) {
+          if (r.floor) continue;
+          for (const p of [r.pts[0], r.pts[r.pts.length - 1]]) if (Math.hypot(p[0], p[1]) < lay.square.r + 0.5) inAt.push(Math.atan2(p[1], p[0]));
+        }
+        const gap = (a) => Math.min(Math.PI, ...inAt.map(b => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)))));
+        const benches = new THREE.Group();
+        let n = 0;
+        for (let i = 0; i < 8 && n < 4; i++) {
+          const a = (i + 0.5) / 8 * Math.PI * 2;
+          if (gap(a) < 0.42) continue;
+          n++;
+          const rr = lay.square.r - 0.9, bx = OX + Math.cos(a) * rr, bz = OZ + Math.sin(a) * rr;
+          const b = new THREE.Group(), wood = mat('#8a6542'), iron = mat('#2f2f36');
+          b.add(mesh(new THREE.BoxGeometry(1.2, 0.07, 0.38), wood, 0, 0.42, 0));
+          b.add(mesh(new THREE.BoxGeometry(1.2, 0.3, 0.06), wood, 0, 0.66, -0.19));
+          for (const sx of [-0.5, 0.5]) b.add(mesh(box(0.07, 0.42, 0.34), iron, sx, 0, 0));
+          b.position.set(bx, heightAt(bx, bz), bz);
+          b.rotation.y = Math.atan2(OX - bx, OZ - bz);
+          benches.add(b);
+          if (fin.quoins) {
+            const pr = rr + 2.0, px = OX + Math.cos(a) * pr, pz = OZ + Math.sin(a) * pr;
+            const pl = new THREE.Group();
+            pl.add(mesh(box(0.7, 0.45, 0.7), mat('#cfc4ad')));
+            pl.add(mesh(lumpySphere(0.36, 1), mat('#4f8a34'), 0, 0.68, 0));
+            for (let k = 0; k < 4; k++) pl.add(mesh(new THREE.SphereGeometry(0.08, 6, 4), mat(['#e86a9a', '#f2d04a', '#ffffff', '#e8584a'][k]), Math.cos(k * 1.7) * 0.28, 0.62, Math.sin(k * 1.7) * 0.28));
+            pl.position.set(px, heightAt(px, pz), pz);
+            benches.add(pl);
+          }
+        }
+        town.add(benches);
+      }
+    }
+
+    // ----- street lamps along the roads, FINISH.lamps tiles apart, on alternate sides -----
+    if (fin.lamps) {
+      const onRoad = layoutRoads(lay, OX, OZ), spots = [], lamps = new THREE.Group();
+      for (const r of lay.roads) {
+        if (r.key.startsWith('stair:')) continue;
+        let next = 1.5, walked = 0, side = 1;          // next: distance along the road of the next lamp
+        for (let i = 0; i + 1 < r.pts.length; i++) {
+          const [ax, az] = r.pts[i], [bx, bz] = r.pts[i + 1], len = Math.hypot(bx - ax, bz - az);
+          if (len < 1e-6) continue;
+          const ux = (bx - ax) / len, uz = (bz - az) / len;
+          for (; next < walked + len; next += fin.lamps) {
+            const t = next - walked;
+            side = -side;
+            const off = r.width / 2 + 0.55, x = ax + ux * t - uz * off * side, z = az + uz * t + ux * off * side;
+            const wx = x + OX, wz = z + OZ;
+            const ok = onRoad(wx, wz) < 0.12 && Math.hypot(x, z) > lay.square.r + 1.4
+              && BaseLayout.islandSdf(lay, x, z) > 1.5 && BaseLayout.floorAt(lay, x, z) === r.floor && !BaseLayout.onStair(lay, x, z, 0.6)
+              && lay.structures.every(s => Math.hypot(x - s.x, z - s.z) > s.r + 0.5)
+              && spots.every(([px, pz]) => Math.hypot(x - px, z - pz) > fin.lamps * 0.6);
+            if (!ok) continue;
+            spots.push([x, z]);
+            const lamp = lampPost(false);
+            lamp.position.set(wx, heightAt(wx, wz), wz);
+            lamps.add(lamp);
+          }
+          walked += len;
+        }
+      }
+      town.add(lamps);
     }
 
     // ----- the crystal, north of the square -----
@@ -1201,14 +1704,21 @@ function create(cv, { fill = false } = {}) {
       const base = new THREE.Group();
       base.add(mesh(new THREE.CylinderGeometry(1.35, 1.6, 0.35, 8).translate(0, 0.175, 0), mat('#b3aa98', { flat: true })));
       base.add(mesh(new THREE.CylinderGeometry(0.9, 1.05, 0.3, 8).translate(0, 0.5, 0), mat('#cfc4ad', { flat: true })));
+      // standing stones round it: rough and leaning at Camp and Outpost, then dressed pillars, gilt at City
       for (let i = 0; i < 6; i++) {
-        const a = i / 6 * Math.PI * 2;
-        const st = mesh(box(0.35, 1.1 + (i % 2) * 0.4, 0.28), mat('#a39882', { flat: true }), Math.sin(a) * 2.5, 0, Math.cos(a) * 2.5, a);
-        st.rotation.z = (i % 3 - 1) * 0.06;
-        base.add(st);
+        const a = i / 6 * Math.PI * 2, sx = Math.sin(a) * 2.5, sz = Math.cos(a) * 2.5;
+        if (fin.path >= 2) {
+          base.add(mesh(new THREE.CylinderGeometry(0.17, 0.21, 1.35, 8).translate(0, 0.675, 0), mat('#d6ccb8'), sx, 0, sz));
+          base.add(mesh(box(0.34, 0.1, 0.34), mat('#d6ccb8'), sx, 1.35, sz));
+          if (fin.quoins) base.add(mesh(new THREE.SphereGeometry(0.11, 10, 6), mat('#e0b84a', { emissive: '#7a5a10', ei: 0.35 }), sx, 1.55, sz));
+        } else {
+          const st = mesh(box(0.35, 1.1 + (i % 2) * 0.4, 0.28), mat('#a39882', { flat: true }), sx, 0, sz, a);
+          st.rotation.z = (i % 3 - 1) * 0.06;
+          base.add(st);
+        }
       }
       base.position.set(cx, gy, cz);
-      root.add(base);
+      town.add(base);
       const crystal = mesh(new THREE.OctahedronGeometry(0.9, 0).scale(0.75, 2.1, 0.75), mat('#bfe8ff', { emissive: '#4aa8ff', ei: 0.9, flat: true }), cx, gy + 3.0, cz);
       const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: shared.glowTex, color: '#8fd4ff', blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.55 }));
       halo.scale.setScalar(5.5);
@@ -1286,23 +1796,31 @@ function create(cv, { fill = false } = {}) {
     instanced(canopyGeo, mat('#ffffff'), bushes, (e) => new THREE.Color().lerpColors(new THREE.Color('#3d6e2a'), new THREE.Color('#5d8f34'), e.c));
     const BLOOM = ['#e86a9a', '#f2d04a', '#9a6ae8', '#ffffff'].map(c => new THREE.Color(c));
     instanced(new THREE.SphereGeometry(0.07, 6, 4), mat('#ffffff'), blooms, (e) => BLOOM[Math.floor(e.c * BLOOM.length) % BLOOM.length]);
+    bake(town);
   }
 
   /**
    * The platforms' masonry. For each open floor: the outline of its platform at the cliff's foot
    * (BaseLayout.floorSdf = -CLIFF, by marching squares on a WALL_STEP grid), and a wall along it
-   * from the ground outside up to the platform, with a merlon on about a third of the segments;
-   * open where a stair crosses. Then each stair as treads and side walls, and on each plaza a
-   * banner in the floor's colour (floors.js) and two lamps.
+   * from the ground outside up to the platform, open where a stair crosses. Its top is the tier's
+   * (FINISH.terrace): bare rough stone, a merlon on about a third of the segments, a continuous
+   * coping of dressed stone, or the coping with a balustrade on it. Then each stair as treads and
+   * side walls, and on each plaza a banner in the floor's colour (floors.js) and two lamps.
    */
   const WALL_STEP = 0.5;
-  function floorsOf(lay, OX, OZ, heightAt, root, mat, mesh, box) {
+  const TERRACE_STONE = { bare: ['#a49579', 0.36], merlons: ['#b8aa90', 0.1], coping: ['#c6b99e', 0.08], balustrade: ['#c6b99e', 0.08] };
+  function floorsOf(lay, OX, OZ, heightAt, root, mat, mesh, box, { fin, lampPost, town }) {
     if (!lay.top) return;
     const tex = paintTexture('stone');
     world.textures.push(tex);
     const wallM = patchMaterial(new THREE.MeshLambertMaterial({ color: '#ffffff', map: tex, vertexColors: true, side: THREE.DoubleSide }), U);
-    const stoneA = new THREE.Color('#b8aa90'), tmp = new THREE.Color();
-    const merlons = [];
+    const [stoneHex, rough] = TERRACE_STONE[fin.terrace];
+    const stoneA = new THREE.Color(stoneHex), tmp = new THREE.Color();
+    const merlons = [], coping = [], balusters = [], rails = [];
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    /** A piece laid along a wall segment: centred at (x, y, z), turned to angle `a`, `len` long. */
+    const along = (x, y, z, a, len) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(yAxis, -a), new THREE.Vector3(len, 1, 1));
+    const props = new THREE.Group();
     for (let k = 1; k <= lay.top; k++) {
       const F = lay.floors[k];
       const sdf = (x, z) => BaseLayout.floorSdf(lay, k, x, z) + BaseLayout.CLIFF;
@@ -1327,11 +1845,20 @@ function create(cv, { fill = false } = {}) {
           pos.push(pt.x + OX, y, pt.z + OZ);
           nrm.push(ox, 0, oz);
           uv.push((pt.x + pt.z) * 0.5, y * 0.5);
-          const shade = 0.72 + 0.28 * Math.max(0, Math.min(1, (y - pb) / Math.max(0.1, top - pb))) + (hash(Math.round(pt.x * 2), Math.round(pt.z * 2)) - 0.5) * 0.1;
+          const shade = 0.72 + 0.28 * Math.max(0, Math.min(1, (y - pb) / Math.max(0.1, top - pb))) + (hash(Math.round(pt.x * 2), Math.round(pt.z * 2)) - 0.5) * rough;
           tmp.copy(stoneA).multiplyScalar(shade);
           col.push(tmp.r, tmp.g, tmp.b);
         }
-        if (hash(Math.round(mx * 2) + k, Math.round(mz * 2)) < 0.34) merlons.push(new THREE.Matrix4().makeTranslation(mx + OX + ox * 0.08, top + 0.14, mz + OZ + oz * 0.08));
+        const len = Math.hypot(q.x - p.x, q.z - p.z), ang = Math.atan2(q.z - p.z, q.x - p.x);
+        if (fin.terrace === 'merlons') {
+          if (hash(Math.round(mx * 2) + k, Math.round(mz * 2)) < 0.34) merlons.push(new THREE.Matrix4().makeTranslation(mx + OX + ox * 0.08, top + 0.14, mz + OZ + oz * 0.08));
+        } else if (fin.terrace !== 'bare') {
+          coping.push(along(mx + OX + ox * 0.04, top + 0.06, mz + OZ + oz * 0.04, ang, len + 0.06));
+          if (fin.terrace === 'balustrade') {
+            balusters.push(new THREE.Matrix4().makeTranslation(mx + OX - ox * 0.04, top + 0.12, mz + OZ - oz * 0.04));
+            rails.push(along(mx + OX - ox * 0.04, top + 0.6, mz + OZ - oz * 0.04, ang, len + 0.06));
+          }
+        }
       };
       for (let j = 0; j + 1 < nz; j++) for (let i = 0; i + 1 < nx; i++) {
         const ax = x0 + i * WALL_STEP, az = z0 + j * WALL_STEP, bx = ax + WALL_STEP, bz = az + WALL_STEP;
@@ -1356,22 +1883,28 @@ function create(cv, { fill = false } = {}) {
       // the plaza: a banner in the floor's colour and two lamps
       const colour = typeof Floors !== 'undefined' ? Floors.FLOORS[k].colour : '#c9963f';
       const px = F.core.x + OX, pz = F.core.z + OZ, py = heightAt(px, pz);
-      root.add(mesh(box(0.1, 3.6, 0.1), mat('#3a3530'), px + 1.3, py, pz));
-      root.add(mesh(new THREE.PlaneGeometry(1.0, 0.7), mat(colour, { double: true, emissive: colour, ei: 0.15 }), px + 1.85, py + 3.15, pz));
+      props.add(mesh(box(0.1, 3.6, 0.1), mat('#3a3530'), px + 1.3, py, pz));
+      props.add(mesh(new THREE.PlaneGeometry(1.0, 0.7), mat(colour, { double: true, emissive: colour, ei: 0.15 }), px + 1.85, py + 3.15, pz));
       for (const a of [Math.PI * 0.75, Math.PI * 1.25]) {
         const lx = px + Math.sin(a) * 2.6, lz = pz - Math.cos(a) * 2.6;
-        root.add(mesh(box(0.08, 1.9, 0.08), mat('#3a3530'), lx, heightAt(lx, lz), lz));
-        root.add(mesh(new THREE.BoxGeometry(0.26, 0.3, 0.26), mat('#ffd38a', { emissive: '#ffb04a', ei: 1.2 }), lx, heightAt(lx, lz) + 2.0, lz));
+        const lamp = lampPost();
+        lamp.position.set(lx, heightAt(lx, lz), lz);
+        props.add(lamp);
       }
     }
-    if (merlons.length) {
-      const im = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, 0.28, 0.42), mat('#c9bea6'), merlons.length);
-      merlons.forEach((m, i) => im.setMatrixAt(i, m));
+    const instanced = (geo, m, list) => {
+      if (!list.length) return;
+      const im = new THREE.InstancedMesh(geo, m, list.length);
+      list.forEach((mx, i) => im.setMatrixAt(i, mx));
       im.castShadow = im.receiveShadow = true;
       root.add(im);
-    }
+    };
+    instanced(new THREE.BoxGeometry(0.42, 0.28, 0.42), mat('#bcae94'), merlons);
+    instanced(new THREE.BoxGeometry(1, 0.12, 0.52), mat('#d6ccb8'), coping);
+    instanced(new THREE.CylinderGeometry(0.05, 0.07, 0.42, 8).translate(0, 0.21, 0), mat('#ddd3c0'), balusters);
+    instanced(new THREE.BoxGeometry(1, 0.08, 0.2), mat('#d6ccb8'), rails);
     // stairs: STEPS treads on the ramp heightAt gives the walkers, with a low wall each side
-    const STEPS = 12, tread = mat('#cfc4ad'), side = mat('#b8aa90');
+    const STEPS = 12, tread = mat('#cfc4ad'), side = mat(fin.terrace === 'bare' ? '#a49579' : stoneHex);
     for (const st of lay.stairs) {
       const ax = st.a.x + OX, az = st.a.z + OZ, bx = st.b.x + OX, bz = st.b.z + OZ;
       const len = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / len, uz = (bz - az) / len, ry = Math.atan2(ux, uz);
@@ -1384,9 +1917,10 @@ function create(cv, { fill = false } = {}) {
         for (const sx of [-1, 1]) g.add(mesh(box(0.26, y - loY + 0.4, len / STEPS + 0.02), side, sx * (st.w / 2 + 0.13), 0, 0));
         g.position.set(cx, loY, cz);
         g.rotation.y = ry;
-        root.add(g);
+        props.add(g);
       }
     }
+    town.add(props);
   }
 
   /**
