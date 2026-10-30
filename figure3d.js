@@ -903,6 +903,10 @@ function buildBodyRaw(look) {
   const legCol = lg ? (lg.cut === 'plate' ? lg.colour : lg.colour) : skin;
   const belt = shade(sh ? sh.colour : legCol, 0.45);
   const mailCol = mail ? (mail.kind === 'light' ? mail.leather : mail.metal) : null;
+  // contact shading: a garment edge that sits over another surface darkens the band just below it
+  const band = p.H * 0.022;
+  const below = (y, edge, depth) => y < edge ? 1 - depth * (1 - sstep(edge - band, edge, y)) : 1;
+  const under = (c, f) => f < 0.995 ? shade(c, f) : c;
   // neckline depths: a scoop is one band; a V is two steps, narrow and deep, wide and shallow
   const neckScoop = neckY - 0.005 - p.chest * 0.24, neckV1 = neckY - 0.005 - p.chest * 0.38, neckV2 = neckY - 0.005 - p.chest * 0.2;
   const torsoColour = (a, y) => {
@@ -937,11 +941,11 @@ function buildBodyRaw(look) {
   const belly = p.belly;
   const bustF = p.bust ? 1 + 0.32 * p.bust : 1;
   const hemYs = [waistY - p.waist * 0.07, waistY + p.waist * 0.07, shirtBottom].concat(sh && !mailCol ? (sh.neck === 'v' ? [neckV1, neckV2] : sh.neck === 'scoop' ? [neckScoop] : []) : []);
-  const shoulderTop = Math.min(p.chestW * 1.02, p.shoulder - r.arm * 0.3);
+  const shoulderTop = Math.min(p.chestW * 1.06, p.shoulder - r.arm * 0.15);
   const pecF = 1 + p.pec, pecChest = Math.max(bustF, pecF);
   let torso = [
-    { y: hipY - p.pelvis * 0.4, rx: p.pelvisW * 0.52, rz: p.pelvisD * 0.62, w: 'hips' },
-    { y: hipY - p.pelvis * 0.08, rx: p.pelvisW * 0.94, rz: p.pelvisD * 0.95, rzB: p.pelvisD * 1.05, w: 'hips' },
+    { y: hipY - p.pelvis * 0.4, rx: p.pelvisW * 0.48, rz: p.pelvisD * 0.46, z: -p.pelvisD * 0.12, w: 'hips' },
+    { y: hipY - p.pelvis * 0.08, rx: p.pelvisW * 0.94, rz: p.pelvisD * 0.82, rzB: p.pelvisD * 1.08, z: -p.pelvisD * 0.04, w: 'hips' },
     { y: hipY + p.pelvis * 0.4, rx: p.pelvisW, rz: p.pelvisD, rzB: p.pelvisD * 1.08, w: 'hips' },
     { y: spineY, rx: lerp(p.pelvisW, p.waistW, 0.6), rz: lerp(p.pelvisD, p.waistD, 0.6) * (1 + belly * 0.1), w: [['hips', 0.5], ['spine', 0.5]] },
     { y: spineY + p.waist * 0.55, rx: p.waistW * bulk, rz: p.waistD * bulk, rzF: p.waistD * bulk * (1 + belly * 0.25), w: 'spine' },
@@ -949,8 +953,9 @@ function buildBodyRaw(look) {
     { y: chestY + p.chest * 0.42, rx: p.chestW * bulk, rz: p.chestD * bulk, rzF: p.chestD * bulk * pecChest, sq: 2.15, w: 'chest' },
     { y: chestY + p.chest * 0.58, rx: lerp(p.chestW, shoulderTop, 0.5) * bulk, rz: p.chestD * bulk, rzF: p.chestD * bulk * lerp(1, pecChest, 0.75), rzB: p.chestD * bulk * 1.07, sq: 2.2, w: 'chest' },
     { y: chestY + p.chest * 0.74, rx: shoulderTop * bulk, rz: p.chestD * 0.9 * bulk, rzB: p.chestD * 0.96 * bulk, sq: 2.2, w: 'chest' },
-    { y: chestY + p.chest * 0.88, rx: shoulderTop * 0.82 * bulk, rz: p.chestD * 0.76, sq: 2.1, w: 'chest' },
-    { y: chestY + p.chest * 0.97, rx: lerp(r.neck * 1.5, p.chestW * 0.62, 0.65), rz: p.chestD * 0.6, w: [['chest', 0.85], ['neck', 0.15]] },
+    { y: chestY + p.chest * 0.84, rx: shoulderTop * 0.92 * bulk, rz: p.chestD * 0.8, sq: 2.1, w: 'chest' },
+    { y: chestY + p.chest * 0.93, rx: lerp(r.neck * 1.6, shoulderTop, 0.5) * bulk, rz: p.chestD * 0.66, w: [['chest', 0.9], ['neck', 0.1]] },
+    { y: chestY + p.chest * 0.99, rx: r.neck * 1.75, rz: p.chestD * 0.55, w: [['chest', 0.75], ['neck', 0.25]] },
     { y: neckY + p.neck * 0.35, rx: r.neck * 1.32, rz: r.neck * 1.22, w: [['chest', 0.35], ['neck', 0.65]] },
   ];
   const torsoAt = (y) => {
@@ -963,15 +968,17 @@ function buildBodyRaw(look) {
     }
     return y < torso[0].y ? [torso[0].rx, torso[0].rz] : [p.chestW, p.chestD];
   };
-  torso = refine(torso, hemYs);
-  M.add(loft(torso, 20, { capTop: null, capBottom: 0.35, colourOf: (a, y) => torsoColour(a, y) }));
-  // neck
+  const shirtShadow = sh && !mailCol && sh.body !== 'robe' && sh.body !== 'tunic', beltY = waistY - p.waist * 0.07;
+  torso = refine(torso, hemYs.concat(shirtShadow ? [shirtBottom - band] : [], [beltY - band]));
+  const torsoShade = (y) => (shirtShadow ? below(y, shirtBottom, 0.25) : 1) * (lg && lg.cut !== 'plate' && !mailCol ? below(y, beltY, 0.15) : 1);
+  // the neck continues the torso's profile up into the head
   const neckCol = look.helm && look.helm.kind === 'light' ? look.helm.leather : skin;
-  M.add(loft([
-    { y: neckY - p.neck * 0.3, rx: r.neck, rz: r.neck, w: 'neck', c: neckCol },
-    { y: headY + p.headH * 0.12, rx: r.neck * 0.95, rz: r.neck * 0.95, z: 0.004, w: [['neck', 0.3], ['head', 0.7]], c: neckCol },
-    { y: headY + p.headH * 0.3, rx: r.neck * 0.9, rz: r.neck * 0.9, z: 0.006, w: 'head', c: neckCol },
-  ], 10, { capTop: null, capBottom: null }));
+  const torsoAll = torso.concat([
+    { y: headY + p.headH * 0.12, rx: r.neck * 0.95, rz: r.neck * 0.95, z: 0.004, w: [['neck', 0.3], ['head', 0.7]] },
+    { y: headY + p.headH * 0.3, rx: r.neck * 0.9, rz: r.neck * 0.9, z: 0.006, w: 'head' },
+  ]);
+  const torsoPaint = (a, y) => y > neckY + p.neck * 0.2 ? neckCol : under(torsoColour(a, y), torsoShade(y));
+  const armSpec = [], legSpec = [];
 
   // ----- arms -----
   const sleeve = sh ? sh.sleeve : 'none';
@@ -997,23 +1004,30 @@ function buildBodyRaw(look) {
     };
     const puff = sleeve === 'puff' ? 1.35 : sh && sh.body === 'robe' ? 1.15 : sleeve === 'long' ? 1.07 : 1;
     const pl = plate ? 1.15 : chain ? 1.06 : 1;
+    // shoulder tucked into the torso, deltoid, triceps behind, biceps in front, the forearm's
+    // muscle on the outer side below the elbow, a wrist wider front to back than across; sleeves
+    // soften the muscle shapes by half
+    const def = sh && sleeve !== 'none' ? 0.5 : 1, mus = (k) => lerp(1, k, def);
     let rings = [
-      { y: J.y, rx: r.arm * 1.07 * pl, rz: r.arm * 1.12 * pl, x: ex - s * r.arm * 0.15, w: [[A, 0.65], [C, 0.35]] },
-      { y: J.y - p.upperArm * 0.2, rx: r.arm * 1.1 * puff * pl, rz: r.arm * 1.1 * puff * pl, x: ex + s * r.arm * 0.06, w: A },
-      { y: J.y - p.upperArm * 0.55, rx: r.arm * 0.94 * puff * pl, rz: r.arm * 1.0 * puff * pl, x: ex, w: A },
-      { y: J.y - p.upperArm * 0.86, rx: r.elbow * 1.05 * pl, rz: r.elbow * 1.08 * pl, x: ex, w: A },
-      { y: elbowY, rx: r.elbow * pl, rz: r.elbow * pl, x: ex, w: [[A, 0.5], [F, 0.5]] },
-      { y: elbowY - p.forearm * 0.25, rx: r.fore * 1.08 * pl, rz: r.fore * 1.1 * pl, x: ex, w: F },
-      { y: elbowY - p.forearm * 0.6, rx: r.fore * 0.86 * pl, rz: r.fore * 0.92 * pl, x: ex, w: F },
-      { y: wristY + p.forearm * 0.12, rx: r.wrist * 1.1 * (chain ? 1.25 : pl), rz: r.wrist * 1.0 * (chain ? 1.25 : pl), x: ex, w: F },
-      { y: wristY, rx: r.wrist, rz: r.wrist * 0.9, x: ex, w: [[F, 0.6], [Hd, 0.4]] },
+      { y: J.y - r.arm * 0.05, rx: r.arm * 0.78 * pl, rz: r.arm * 0.92 * pl, x: ex - s * r.arm * 0.75, w: [[A, 0.4], [C, 0.6]] },
+      { y: J.y - p.upperArm * 0.06, rx: r.arm * 1.12 * pl, rz: r.arm * 1.14 * pl, x: ex - s * r.arm * 0.04, w: [[A, 0.7], [C, 0.3]] },
+      { y: J.y - p.upperArm * 0.25, rx: r.arm * 1.06 * puff * pl, rz: r.arm * 1.04 * puff * pl, rzB: r.arm * mus(1.1) * puff * pl, x: ex + s * r.arm * 0.06, w: A },
+      { y: J.y - p.upperArm * 0.5, rx: r.arm * 0.95 * puff * pl, rz: r.arm * 0.98 * puff * pl, rzF: r.arm * mus(1.14) * puff * pl, x: ex, w: A },
+      { y: J.y - p.upperArm * 0.82, rx: r.elbow * 1.08 * pl, rz: r.elbow * 1.05 * pl, x: ex, w: A },
+      { y: elbowY, rx: r.elbow * pl, rz: r.elbow * 0.98 * pl, rzB: r.elbow * mus(1.1) * pl, x: ex, w: [[A, 0.5], [F, 0.5]] },
+      { y: elbowY - p.forearm * 0.22, rx: r.fore * mus(1.14) * pl, rz: r.fore * 1.06 * pl, x: ex + s * r.fore * 0.06 * def, w: F },
+      { y: elbowY - p.forearm * 0.6, rx: r.fore * 0.88 * pl, rz: r.fore * 0.88 * pl, x: ex, w: F },
+      { y: wristY + p.forearm * 0.12, rx: r.wrist * 0.95 * (chain ? 1.25 : pl), rz: r.wrist * 1.12 * (chain ? 1.25 : pl), x: ex, w: F },
+      { y: wristY, rx: r.wrist * 0.82, rz: r.wrist * 1.05, x: ex, w: [[F, 0.6], [Hd, 0.4]] },
     ];
-    rings = refine(rings, [sleeveEnd, wristY + p.forearm * 0.45, wristY + p.forearm * 0.05, elbowY - p.forearm * 0.05].concat(mail && mail.kind === 'light' ? [wristY + p.forearm * 0.5] : []));
-    M.add(loft(rings, 12, { capTop: 0.7, capBottom: 0.3, colourOf: (a, y) => armColour(a, y) }));
+    const sleeved = sh && !mail && (sleeve === 'short' || sleeve === 'long' || sleeve === 'puff');
+    rings = refine(rings, [sleeveEnd, wristY + p.forearm * 0.45, wristY + p.forearm * 0.05, elbowY - p.forearm * 0.05]
+      .concat(mail && mail.kind === 'light' ? [wristY + p.forearm * 0.5] : [], sleeved ? [sleeveEnd - band] : []));
+    armSpec.push({ s, side, rings, J, elbowY, wristY, hems: sleeved ? [sleeveEnd] : [], paint: (a, y) => under(armColour(a, y), sleeved ? below(y, sleeveEnd, 0.22) : 1) });
     if (sh && !mail && (sleeve === 'short' || sleeve === 'long' || sleeve === 'puff')) {
       const [cr, cz] = radiusAt(rings, sleeveEnd), lip = sleeve === 'puff' ? 1.05 : 1.12, F2 = sleeveEnd < elbowY ? F : A;
       M.add(loft([
-        { y: sleeveEnd + p.H * 0.008, rx: cr * lip, rz: cz * lip, x: ex, w: F2, c: shade(sh.colour, 0.9) },
+        { y: sleeveEnd + p.H * (sleeve === 'long' ? 0.022 : 0.008), rx: cr * lip, rz: cz * lip, x: ex, w: F2, c: shade(sh.colour, 0.9) },
         { y: sleeveEnd - p.H * 0.003, rx: cr * lip, rz: cz * lip, x: ex, w: F2, c: shade(sh.colour, 0.72) },
       ], 12, { capTop: null, capBottom: null }));
     }
@@ -1031,17 +1045,34 @@ function buildBodyRaw(look) {
         { y: wristY - p.hand * 0.05, rx: r.wrist * 1.7, rz: r.wrist * 1.75, x: ex, w: [[F, 0.4], [Hd, 0.6]], c: shade(plateCol, 0.8) },
       ], 12, { capTop: null, capBottom: null }));
     }
-    // hand: a flat palm, the fingers curled a little toward the thigh, and a thumb in front
-    const hc = plate ? plateCol : skin;
-    M.add(blob(ex, wristY - p.hand * 0.3, 0.003, r.wrist * 0.92, p.hand * 0.38, r.wrist * 1.5, { w: 10, h: 6 }), hc, Hd);
-    M.add(blob(ex - s * r.wrist * 0.22, wristY - p.hand * 0.72, 0.001, r.wrist * 0.82, p.hand * 0.34, r.wrist * 1.38, { w: 10, h: 6, rot: [0, 0, s * 0.3] }), shade(hc, 0.96), Hd);
-    M.add(blob(ex - s * r.wrist * 0.15, wristY - p.hand * 0.36, 0.003 + r.wrist * 1.32, r.wrist * 0.42, p.hand * 0.3, r.wrist * 0.42, { w: 6, h: 5, rot: [0.35, 0, s * 0.35] }), hc, Hd);
+    // hand: a palm facing the thigh, four fingers curling toward it (the middle one longest), and a
+    // thumb from the front of the palm
+    const hc = plate ? plateCol : skin, fw = r.wrist * 0.6, fr = r.wrist * (plate ? 0.36 : 0.3);
+    M.add(blob(ex, wristY - p.hand * 0.26, 0.002, r.wrist * 0.72, p.hand * 0.3, r.wrist * 1.3, { w: 10, h: 6 }), hc, Hd);
+    [0.46, 0.5, 0.47, 0.38].forEach((len, i) => {
+      const L = p.hand * len, path = [new V(ex, wristY - p.hand * 0.48, 0.002 + (1.5 - i) * fw)];
+      let ang = 0;
+      for (const [part, bend] of [[0.45, 0.25], [0.3, 0.45], [0.25, 0.4]]) {
+        ang += bend;
+        const q = path[path.length - 1];
+        path.push(new V(q.x - s * Math.sin(ang) * L * part, q.y - Math.cos(ang) * L * part, q.z));
+      }
+      M.add(sweep(path, (t) => fr * (1 - 0.25 * t), 5, i % 2 ? hc : shade(hc, 0.96), Hd, { cap0: 0.4, cap1: 0.9 }));
+    });
+    const tb = new V(ex - s * r.wrist * 0.25, wristY - p.hand * 0.18, 0.002 + r.wrist * 1.05);
+    M.add(sweep([tb, tb.clone().add(new V(-s * r.wrist * 0.3, -p.hand * 0.2, r.wrist * 0.45)), tb.clone().add(new V(-s * r.wrist * 0.65, -p.hand * 0.38, r.wrist * 0.55))],
+      (t) => fr * 1.2 * (1 - 0.25 * t), 5, hc, Hd, { cap0: 0.4, cap1: 0.9 }));
   }
 
   // ----- legs -----
   const cut = lg ? lg.cut : 'bare';
   const feetCutv = boots ? (boots.kind === 'heavy' ? 'plate' : boots.kind === 'medium' ? 'rim' : 'boots') : ft ? ft.cut : 'bare';
   const bootCol = boots ? (boots.kind === 'light' ? boots.leather : boots.kind === 'heavy' ? boots.metal : boots.leather) : ft ? ft.colour : skin;
+  // the lowest hem hanging over the legs (skirt, robe, tunic, mail skirt, fauld); legs under it are in its shade
+  const skirtHem = Math.min(
+    lg && (lg.cut === 'skirt' || lg.cut === 'gown' || lg.cut === 'legion') ? (lg.cut === 'gown' ? p.ankle + p.shin * 0.05 : lg.cut === 'legion' ? hipY - p.thigh * 0.55 : hipY - p.thigh * 0.95) : Infinity,
+    sh && (sh.body === 'robe' || sh.body === 'tunic') ? (sh.body === 'robe' ? p.ankle + p.shin * 0.08 : hipY - p.thigh * 0.45) : Infinity,
+    mail && mail.kind === 'medium' ? hipY - p.thigh * 0.4 : mail && mail.kind === 'heavy' ? hipY - p.thigh * 0.22 : Infinity);
   for (const [s, side] of [[1, 'L'], [-1, 'R']]) {
     const J = Bp['thigh' + side], kneeY = J.y - p.thigh, ankY = p.ankle;
     const Th = 'thigh' + side, Sh = 'shin' + side, Ft = 'foot' + side;
@@ -1063,17 +1094,31 @@ function buildBodyRaw(look) {
     const loose = cut === 'puffy' ? 1.3 : cut === 'wide' ? 1.22 : cut === 'pants' || cut === 'cuffed' ? 1.06 : 1;
     const g = greaves ? 1.12 : 1;
     const bootR = feetCutv === 'boots' || feetCutv === 'rim' || feetCutv === 'fold' || feetCutv === 'plate' ? 1.18 : 1;
+    // thigh with the quadriceps in front, a kneecap, the calf behind and to the inside, a narrow
+    // ankle; trousers and greaves soften the muscle shapes
+    const bareLeg = !greaves && (cut === 'bare' || cut === 'tights' || cut === 'short' || cut === 'shorts' || cut === 'skirt' || cut === 'gown' || cut === 'legion');
+    const mus = (k) => lerp(1, k, bareLeg ? 1 : 0.4), bR = (y) => y < bootTop ? bootR : 1, kr = r.knee * (loose * 0.6 + 0.4) * g;
+    const tq = lerp(r.thigh, r.knee, 0.3) * loose * g, tk = lerp(r.thigh, r.knee, 0.68) * loose * g;
+    const cy = kneeY - p.shin * 0.3, my = kneeY - p.shin * 0.58, ly = kneeY - p.shin * 0.8;
     let rings = [
       { y: J.y + 0.04, rx: r.thigh * 1.04, rz: r.thigh * 1.0, x: J.x * 0.84, w: [[Th, 0.55], ['hips', 0.45]] },
       { y: J.y - p.thigh * 0.15, rx: r.thigh * loose * g, rz: r.thigh * loose * g, x: J.x, w: Th },
-      { y: J.y - p.thigh * 0.72, rx: lerp(r.thigh, r.knee, 0.65) * loose * g, rz: lerp(r.thigh, r.knee, 0.65) * loose * g, x: lerp(J.x, kx, 0.72), w: Th },
-      { y: kneeY, rx: r.knee * (loose * 0.6 + 0.4) * g, rz: r.knee * 1.05 * (loose * 0.6 + 0.4) * g, x: kx, w: [[Th, 0.5], [Sh, 0.5]] },
-      { y: kneeY - p.shin * 0.25, rx: r.calf * loose * g, rz: r.calf * loose * g, rzB: r.calf * 1.25 * loose * g, x: kx, w: Sh },
-      { y: kneeY - p.shin * 0.78, rx: r.ankle * 1.2 * (cut === 'puffy' ? 1.5 : loose) * g * bootR, rz: r.ankle * 1.2 * loose * g * bootR, x: lerp(kx, ax, 0.8), w: Sh },
+      { y: J.y - p.thigh * 0.42, rx: tq, rz: tq, rzF: tq * mus(1.1), x: lerp(J.x, kx, 0.42), w: Th },
+      { y: J.y - p.thigh * 0.78, rx: tk, rz: tk, x: lerp(J.x, kx, 0.78), w: Th },
+      { y: kneeY, rx: kr, rz: kr, rzF: kr * mus(1.16), rzB: kr * mus(0.92), x: kx, w: [[Th, 0.5], [Sh, 0.5]] },
+      { y: kneeY - p.shin * 0.1, rx: kr * 0.98, rz: kr * 0.98, x: kx, w: Sh },
+      { y: cy, rx: r.calf * loose * g * bR(cy), rz: r.calf * 0.95 * loose * g * bR(cy), rzB: r.calf * mus(1.32) * loose * g * bR(cy), x: kx - s * r.calf * 0.08 * (bareLeg ? 1 : 0.3), w: Sh },
+      { y: my, rx: lerp(r.calf, r.ankle * 1.2, 0.55) * loose * g * bR(my), rz: lerp(r.calf, r.ankle * 1.2, 0.55) * loose * g * bR(my), rzB: lerp(r.calf * 1.15, r.ankle * 1.2, 0.55) * loose * g * bR(my), x: lerp(kx, ax, 0.58), w: Sh },
+      { y: ly, rx: r.ankle * 1.18 * (cut === 'puffy' ? 1.5 : loose) * g * bR(ly), rz: r.ankle * 1.18 * loose * g * bR(ly), x: lerp(kx, ax, 0.8), w: Sh },
       { y: ankY, rx: r.ankle * bootR, rz: r.ankle * bootR, x: ax, w: [[Sh, 0.6], [Ft, 0.4]] },
     ];
-    rings = refine(rings, [bootTop, bootTop - p.shin * 0.08, legEnd, ankY + p.shin * 0.12, kneeY + p.thigh * 0.2]);
-    M.add(loft(rings, 10, { capTop: null, capBottom: 0.2, colourOf: (a, y) => legColour(a, y) }));
+    const lip = feetCutv === 'fold' || feetCutv === 'rim' ? bootTop - p.shin * 0.04 : feetCutv === 'boots' ? bootTop - p.H * 0.01 : null;
+    rings = refine(rings, [bootTop, bootTop - p.shin * 0.08, legEnd, ankY + p.shin * 0.12, kneeY + p.thigh * 0.2,
+      legEnd - band, lip, lip != null ? lip - band : null, skirtHem, skirtHem - band]);
+    const legShade = (y) => (cut === 'shorts' || cut === 'short' ? below(y, legEnd, 0.22) : 1)
+      * (lip != null ? below(y, lip, 0.2) : 1)
+      * (isFinite(skirtHem) ? (y > skirtHem ? lerp(0.8, 0.6, sstep(skirtHem, skirtHem + p.thigh * 0.5, y)) : below(y, skirtHem, 0.15)) : 1);
+    legSpec.push({ s, side, rings, J, kneeY, ankY, hems: [legEnd, bootTop, lip, skirtHem], paint: (a, y) => under(legColour(a, y), legShade(y)) });
     if (feetCutv === 'boots' || feetCutv === 'plate') {
       const [br, bz] = radiusAt(rings, bootTop), bc = feetCutv === 'plate' ? sheen(bootCol, 0.7) : shade(bootCol, 1.1);
       M.add(loft([
@@ -1108,13 +1153,152 @@ function buildBodyRaw(look) {
     if (feetCutv === 'hoofs') {
       M.add(blob(ax, ankY * 0.5, 0.01, p.footW * 1.1, ankY * 0.62, p.footW * 1.25, { w: 8, h: 6, flatBottom: true }), fc, Ft);
     } else {
-      const sole = shade(fc, 0.5), footZ = p.foot * 0.28;
-      const footCol = feetCutv === 'bare' ? fc
-        : feetCutv === 'plate' ? (x, y, z) => (y < ankY * 0.1 ? sole : Math.floor((z - footZ) / (p.foot * 0.13) + 10) % 2 ? shade(fc, 0.82) : fc)
-        : (x, y) => (y < ankY * 0.1 ? sole : fc);
-      M.add(blob(ax, ankY * 0.42, footZ + (feetCutv === 'plate' ? p.foot * 0.04 : 0), p.footW * fl, ankY * 0.62 * fl, p.foot * (feetCutv === 'plate' ? 0.6 : 0.55) * fl, { w: 12, h: 8, flatBottom: true }), footCol, Ft);
-      if (feetCutv === 'sandals') M.add(blob(ax, 0.006, p.foot * 0.28, p.footW * 1.1, 0.008, p.foot * 0.58, { w: 8, h: 4 }), ft ? ft.colour : '#6a4a2a', Ft);
+      // lofted heel to toe (in the loft's y, turned onto z): rounded over the top, flat underneath,
+      // widest at the ball. Shoes and boots stand on a darker sole; sandals are a bare foot on a
+      // sole with two straps
+      const sandals = feetCutv === 'sandals', shod = feetCutv !== 'bare' && !sandals;
+      const z0 = -p.foot * 0.25, len = p.foot * 1.02 * fl, w = p.footW * fl, h = ankY * 1.25 * fl;
+      const lift = shod ? ankY * (feetCutv === 'slippers' ? 0.06 : 0.12) : sandals ? ankY * 0.08 : 0;
+      const prof = [[0, 0.62, 0.42], [0.12, 0.9, 0.75], [0.32, 1, 1], [0.55, 1.12, 0.74], [0.78, 1.08, 0.58], [0.92, 0.92, 0.48], [1, 0.66, 0.38]];   // [along, width, height]
+      const upper = sandals ? skin : fc, plateBands = feetCutv === 'plate';
+      const shoe = (pr, k, c, open = false) => {
+        const g = loft(pr.map(([u, wk, hh], i) => ({ y: z0 + u * len, rx: w * wk * k, rz: h * hh / 2 * k, z: -(lift + h * hh / 2), sq: 2.3, c: typeof c === 'function' ? c(i) : c, w: Ft })),
+          12, { capTop: open ? null : 0.5, capBottom: open ? null : 0.5 });
+        g.rotateX(Math.PI / 2);
+        g.translate(ax, 0, 0);
+        M.add(g);
+      };
+      shoe(prof, 1, plateBands ? (i) => (i % 2 ? shade(upper, 0.82) : upper) : shod ? (i) => (i >= 5 ? shade(upper, 0.86) : upper) : upper);
+      if (lift) {
+        const sc = sandals ? (ft ? ft.colour : '#6a4a2a') : shade(fc, 0.45);
+        const g = loft(prof.map(([u, wk]) => ({ y: z0 + u * len, rx: w * wk * 1.06, rz: lift / 2, z: -lift / 2, sq: 3, c: sc, w: Ft })), 12, { capTop: 0.4, capBottom: 0.4 });
+        g.rotateX(Math.PI / 2);
+        g.translate(ax, 0, 0);
+        M.add(g);
+      }
+      if (sandals) for (const u0 of [0.22, 0.56]) {
+        const at = (u) => { const i = prof.findIndex(q => q[0] >= u); const a = prof[Math.max(0, i - 1)], b = prof[i], t = (u - a[0]) / Math.max(1e-6, b[0] - a[0]); return [u, lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; };
+        shoe([at(u0 - 0.03), at(u0 + 0.03)], 1.05, ft ? ft.colour : '#6a4a2a', true);
+      }
     }
+  }
+
+  // ----- the body as one surface -----
+  // A control cage of rings sampled from the torso, arm and leg profiles: 12 vertices round the
+  // torso and neck, 8 round each limb. An arm joins the torso through the hole left by removing
+  // the 2x2 patch of torso faces round the shoulder joint; a leg joins half of the lowest torso
+  // ring and a crotch vertex shared with the other leg. One Catmull-Clark step, then every vertex
+  // moved onto the limit surface, makes one smooth surface, shoulders and hips included. That
+  // surface sits inside its cage (by about 5% for 12 sides, 10% for 8), so ring radii are scaled
+  // up by as much. The cage's shoulder corners stand out past the torso so the limit surface
+  // rounds over them into a deltoid instead of sloping straight down to the arm.
+  const cageP = [], cageW = [], cageF = [];
+  const cv = (pt, w) => { cageP.push(pt[0], pt[1], pt[2]); cageW.push(w); return cageW.length - 1; };
+  const onRing = (g, a, k) => {
+    let sx = Math.sin(a), cz = Math.cos(a);
+    if (g.sq !== 2) { sx = Math.sign(sx) * Math.pow(Math.abs(sx), 2 / g.sq); cz = Math.sign(cz) * Math.pow(Math.abs(cz), 2 / g.sq); }
+    return [g.x + sx * g.rx * k, g.y, g.z + cz * (cz >= 0 ? g.rzF : g.rzB) * k];
+  };
+  // heights that must keep their own ring (hems) are added where they fall between two others
+  const withHems = (ys, hems, lo, hi) => {
+    for (const y of hems) if (y != null && isFinite(y) && y > lo && y < hi && ys.every(t => Math.abs(t - y) > p.H * 0.012)) ys.push(y);
+    return ys;
+  };
+  const shY = Bp.armL.y, TK = 12;
+  const tys = withHems([hipY - p.pelvis * 0.3, hipY + p.pelvis * 0.25, spineY, spineY + p.waist * 0.55, chestY, shY - r.arm * 1.5, shY, shY + r.arm * 1.1,
+    neckY - p.neck * 0.05, neckY + p.neck * 0.6, headY + p.headH * 0.25], [beltY, waistY + p.waist * 0.07, shirtBottom], hipY, chestY).sort((a, b) => a - b);
+  const iA = tys.indexOf(shY);
+  const TR = tys.map((y, i) => {
+    const g = ringAt(torsoAll, y);
+    return Array.from({ length: TK }, (_, k) => {
+      const side = k >= 2 && k <= 4 ? 'L' : k >= 8 && k <= 10 ? 'R' : null;
+      if (side && i === iA && (k === 3 || k === 9)) return -1;                  // the middle of an arm hole
+      const pt = onRing(g, k / TK * TAU, 1.05);
+      if (side && i === iA - 1) pt[0] *= 0.94;                                   // armpit
+      if (side && i === iA + 1) pt[0] += Math.sign(pt[0]) * r.arm * (k === 3 || k === 9 ? 0.75 : 0.45);   // over the shoulder
+      if (side && i === iA) pt[0] += Math.sign(pt[0]) * r.arm * 0.35;
+      return cv(pt, side && i >= iA ? [['chest', 0.55], ['clav' + side, 0.45]] : g.w);
+    });
+  });
+  for (let i = 0; i < TR.length - 1; i++) for (let k = 0; k < TK; k++) {
+    const q = [TR[i][k], TR[i][(k + 1) % TK], TR[i + 1][(k + 1) % TK], TR[i + 1][k]];
+    if (q.every(v => v >= 0)) cageF.push(q);
+  }
+  cageF.push(TR[TR.length - 1].slice());                                           // closed inside the head
+  // a limb: 8-vertex rings at heights ys, the first joined to `loop`, the last closed (inside the hand or shoe)
+  const limb = (loop, ys, L) => {
+    let prev = loop;
+    for (const y of ys) {
+      const g = ringAt(L.rings, y);
+      const ring = Array.from({ length: 8 }, (_, j) => cv(onRing(g, L.s * j * TAU / 8, 1.1), g.w));
+      for (let j = 0; j < 8; j++) cageF.push([prev[j], prev[(j + 1) % 8], ring[(j + 1) % 8], ring[j]]);
+      prev = ring;
+    }
+    cageF.push(prev.slice());
+  };
+  for (const A of armSpec) {
+    // hole vertices in the arm ring's order: front, then over the top of the shoulder (the arm's
+    // outer side), back, and under it (the armpit, the arm's inner side)
+    const [kf, km, kb] = A.s > 0 ? [2, 3, 4] : [10, 9, 8];
+    const loop = [TR[iA][kf], TR[iA + 1][kf], TR[iA + 1][km], TR[iA + 1][kb], TR[iA][kb], TR[iA - 1][kb], TR[iA - 1][km], TR[iA - 1][kf]];
+    const top = A.J.y - p.upperArm * 0.38;
+    limb(loop, withHems([top, A.J.y - p.upperArm * 0.65, A.elbowY + p.upperArm * 0.12, A.elbowY, A.elbowY - p.forearm * 0.28, A.elbowY - p.forearm * 0.62,
+      A.wristY + p.forearm * 0.12, A.wristY], A.hems, A.wristY, top).sort((a, b) => b - a), A);
+  }
+  const crotch = cv([0, tys[0] - p.pelvis * 0.12, -p.pelvisD * 0.08], 'hips');
+  for (const Lg of legSpec) {
+    const B = TR[0], loop = Lg.s > 0 ? [B[1], B[2], B[3], B[4], B[5], B[6], crotch, B[0]] : [B[11], B[10], B[9], B[8], B[7], B[6], crotch, B[0]];
+    const top = Lg.J.y - p.thigh * 0.22;
+    limb(loop, withHems([top, Lg.J.y - p.thigh * 0.48, Lg.J.y - p.thigh * 0.76, Lg.kneeY + p.thigh * 0.06, Lg.kneeY - p.shin * 0.1, Lg.kneeY - p.shin * 0.32,
+      Lg.kneeY - p.shin * 0.58, Lg.kneeY - p.shin * 0.8, Lg.ankY], Lg.hems, Lg.ankY, top).sort((a, b) => b - a), Lg);
+  }
+  orientFaces(cageP, cageF);
+  {
+    // weights as dense rows over just the bones the cage uses
+    const used = [...new Set(cageW.flatMap(w => normWeights(w || 'root').map(e => e[0])))], col = new Map(used.map((b, i) => [b, i])), nb = used.length;
+    const W0 = new Float32Array(cageW.length * nb);
+    cageW.forEach((w, i) => { for (const [b, v] of normWeights(w || 'root')) W0[i * nb + col.get(b)] = v; });
+    const body = toLimit(catmullClark({ P: Float64Array.from(cageP), W: W0, F: cageF, nb }));
+    const n = body.P.length / 3, pos = new Float32Array(body.P), colr = new Float32Array(n * 3), sf = new Float32Array(n), si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    // each limb's columns in the weight rows, to tell which part a vertex mostly belongs to
+    const cols = (names) => names.map(nm => col.get(BI[nm])).filter(c => c != null);
+    for (const A of armSpec) A.cols = cols(['clav', 'arm', 'fore', 'hand'].map(b => b + A.side));
+    for (const Lg of legSpec) Lg.cols = cols(['thigh', 'shin', 'foot'].map(b => b + Lg.side));
+    const part = (row, L) => { let t = 0; for (const c of L.cols) t += body.W[row + c]; return t > 0.5; };
+    const bi = [0, 0, 0, 0], bw = [0, 0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const row = i * nb, x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+      // the four heaviest bones
+      bw.fill(0);
+      for (let b = 0; b < nb; b++) {
+        const v = body.W[row + b];
+        if (v <= bw[3]) continue;
+        let j = 3;
+        while (j > 0 && v > bw[j - 1]) { bw[j] = bw[j - 1]; bi[j] = bi[j - 1]; j--; }
+        bw[j] = v; bi[j] = used[b];
+      }
+      const sum = bw[0] + bw[1] + bw[2] + bw[3] || 1;
+      for (let j = 0; j < 4; j++) { si[i * 4 + j] = bw[j] > 0 ? bi[j] : 0; sw[i * 4 + j] = bw[j] / sum; }
+      // paint by the part the vertex mostly belongs to
+      let c = null;
+      for (const A of armSpec) if (part(row, A)) { const [cx, cz] = centreAt(A.rings, y); c = A.paint(Math.atan2(x - cx, z - cz), y); }
+      if (!c) for (const Lg of legSpec) if (part(row, Lg)) { const [cx, cz] = centreAt(Lg.rings, y); c = Lg.paint(Math.atan2(x - cx, z - cz), y); }
+      if (!c) c = torsoPaint(Math.atan2(x, z), y);
+      const cc = colour(c);
+      colr[i * 3] = cc.r; colr[i * 3 + 1] = cc.g; colr[i * 3 + 2] = cc.b;
+      sf[i] = surfOf(c);
+    }
+    const idx = new Uint32Array(body.F.length * 6);
+    body.F.forEach((f, j) => idx.set([f[0], f[1], f[2], f[0], f[2], f[3]], j * 6));
+    const geo = new T.BufferGeometry();
+    geo.setAttribute('position', new T.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new T.BufferAttribute(colr, 3));
+    geo.setAttribute('surf', new T.BufferAttribute(sf, 1));
+    geo.setAttribute('skinIndex', new T.BufferAttribute(si, 4));
+    geo.setAttribute('skinWeight', new T.BufferAttribute(sw, 4));
+    geo.setIndex(new T.BufferAttribute(idx, 1));
+    geo.computeVertexNormals();
+    M.add(geo);
   }
 
   // ----- skirts, robes, tunic hems, mail skirts -----
@@ -1228,6 +1412,28 @@ function buildBodyRaw(look) {
     M.add(blob(0, waistY, Bp.spine.z + wz * 1.16, p.waistW * 0.18, p.waist * 0.11, p.waistD * 0.08, { w: 8, h: 4 }), mail.metal, 'spine');
     M.add(blob(-wx * 0.85, waistY - p.waist * 0.3, Bp.spine.z + wz * 0.45, p.waistW * 0.2, p.waist * 0.35, p.waistD * 0.25, { w: 8, h: 6 }), shade(mail.leather, 0.8), 'hips');
   }
+  // the front of the torso at height y (its deepest point, pecs and belly included)
+  const frontAt = (y) => torsoAt(y)[1];
+  // a leather belt with a buckle over trousers and skirts, and on some a pouch at the right hip
+  const belted = lg && !mail && !(sh && (sh.body === 'robe' || sh.body === 'tunic')) && ['pants', 'cuffed', 'wide', 'puffy', 'shorts', 'short', 'skirt', 'legion'].includes(lg.cut);
+  if (belted) {
+    const bc = ['#3a2618', '#5a3a24', '#2a2420'][look.seed % 3], buckle = look.seed % 5 < 3 ? '#b89a50' : '#9a9ca2';
+    const bw = torsoAt(waistY)[0], bd = frontAt(waistY), bh = p.waist * 0.075;
+    M.add(loft([
+      { y: waistY + bh, rx: bw * 1.05, rz: bd * 1.06, w: [['hips', 0.4], ['spine', 0.6]], c: bc },
+      { y: waistY - bh, rx: bw * 1.07, rz: bd * 1.08, w: [['hips', 0.5], ['spine', 0.5]], c: shade(bc, 0.8) },
+    ], 20, { capTop: null, capBottom: null }));
+    M.add(blob(0, waistY, bd * 1.1, p.waistW * 0.13, bh * 1.25, p.waistD * 0.06, { w: 8, h: 4 }), buckle, 'spine');
+    if (look.seed % 2) M.add(blob(-bw * 0.8, waistY - p.waist * 0.25, bd * 0.4, p.waistW * 0.2, p.waist * 0.28, p.waistD * 0.24, { w: 8, h: 6 }), shade(bc, 1.25), 'hips');
+  }
+  // buttoned and cardigan fronts: a raised placket down the middle with buttons on it
+  if (sh && !mailCol && (sh.neck === 'buttoned' || sh.neck === 'cardigan')) {
+    const pc = sh.neck === 'cardigan' ? mix(sh.colour, '#f0ece0', 0.6) : shade(sh.colour, 0.8), y0 = Math.max(shirtBottom, waistY) + 0.006, y1 = neckY - p.chest * 0.06;
+    const path = [];
+    for (let i = 0; i <= 6; i++) { const y = lerp(y0, y1, i / 6); path.push(new V(0, y, frontAt(y) * 1.012)); }
+    M.add(sweep(path, () => [p.chestW * 0.07, p.H * 0.002], 6, pc, (t) => t < 0.4 ? [['spine', 0.5], ['chest', 0.5]] : 'chest', { up: () => new V(0, 0, 1), cap0: 0, cap1: 0 }));
+    for (let i = 0; i < 4; i++) { const y = lerp(y0, y1, (i + 0.6) / 4.4); M.add(blob(0, y, frontAt(y) * 1.03, p.chestW * 0.035, p.chestW * 0.035, p.H * 0.004, { w: 6, h: 4 }), '#efe6cc', y > chestY ? 'chest' : 'spine'); }
+  }
   if (sh && !mailCol && (sh.neck === 'crew' || sh.neck === 'buttoned' || sh.neck === 'laced' || sh.neck === 'cardigan')) {
     M.add(loft([
       { y: neckY + p.neck * 0.32, rx: r.neck * 1.36, rz: r.neck * 1.28, w: [['chest', 0.4], ['neck', 0.6]], c: shade(sh.colour, 0.85) },
@@ -1248,6 +1454,35 @@ function buildBodyRaw(look) {
   for (let i = 0; i < P.count; i++) {
     const k = lerp(0.74, 1, sstep(0, p.H * 0.55, P.getY(i)));
     Cc.setXYZ(i, Cc.getX(i) * k, Cc.getY(i) * k, Cc.getZ(i) * k);
+  }
+  // baked occlusion in the bind pose: capsules along the torso and each limb segment and a sphere
+  // for the head. Each darkens a vertex by (R / d)^2 * cos(normal, way to it), summed over the
+  // occluders the vertex is outside of, x1.3, at most 55%: armpits, the sides under the arms, inner
+  // thighs, the tops of the shoulders under the head
+  const caps = [], capsule = (a, b, R) => caps.push(a.x, a.y, a.z, b.x - a.x, b.y - a.y, b.z - a.z, R);
+  capsule({ x: 0, y: hipY - p.pelvis * 0.1, z: 0 }, { x: 0, y: neckY - p.chest * 0.2, z: Bp.chest.z }, (p.waistW + p.waistD) / 2);
+  for (const sd of ['L', 'R']) {
+    capsule(Bp['arm' + sd], Bp['fore' + sd], r.arm);
+    capsule(Bp['fore' + sd], Bp['hand' + sd], r.fore);
+    capsule(Bp['thigh' + sd], Bp['shin' + sd], r.thigh * 0.95);
+    capsule(Bp['shin' + sd], Bp['foot' + sd], r.calf);
+  }
+  capsule(Bp.headC, Bp.headC, p.headW * 0.5);
+  const occ = Float64Array.from(caps), nOcc = occ.length;
+  const pa = P.array, na = geo.getAttribute('normal').array, ca = Cc.array;
+  for (let i = 0, n = P.count * 3; i < n; i += 3) {
+    const px = pa[i], py = pa[i + 1], pz = pa[i + 2];
+    let o = 0;
+    for (let j = 0; j < nOcc; j += 7) {
+      const dx = occ[j + 3], dy = occ[j + 4], dz = occ[j + 5], R2 = occ[j + 6] * occ[j + 6], L2 = dx * dx + dy * dy + dz * dz;
+      let t = L2 > 0 ? ((px - occ[j]) * dx + (py - occ[j + 1]) * dy + (pz - occ[j + 2]) * dz) / L2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const vx = occ[j] + dx * t - px, vy = occ[j + 1] + dy * t - py, vz = occ[j + 2] + dz * t - pz, d2 = vx * vx + vy * vy + vz * vz;
+      if (d2 < R2 * 1.1 || d2 > R2 * 25) continue;
+      const c = na[i] * vx + na[i + 1] * vy + na[i + 2] * vz;
+      if (c > 0) o += c / Math.sqrt(d2) * R2 / d2;
+    }
+    if (o > 0.002) { const kk = 1 - 0.55 * Math.min(1, o * 1.3); ca[i] *= kk; ca[i + 1] *= kk; ca[i + 2] *= kk; }
   }
   return { geo, bind: Bp };
 }
@@ -1291,6 +1526,177 @@ function refine(rings, ys) {
     }
   }
   return out;
+}
+
+/** Bone weights a fraction t of the way from wa to wb (bone names, weight lists or null for root). */
+function blendWeights(wa, wb, t) {
+  if (wa === wb || t <= 0) return wa;
+  if (t >= 1) return wb;
+  const m = new Map();
+  for (const [b, v] of normWeights(wa || 'root')) m.set(b, (m.get(b) || 0) + v * (1 - t));
+  for (const [b, v] of normWeights(wb || 'root')) m.set(b, (m.get(b) || 0) + v * t);
+  return [...m].sort((x, y) => y[1] - x[1]).slice(0, 4);
+}
+
+/**
+ * Move every vertex of an all-quad mesh (one Catmull-Clark step done) to where it would end up
+ * after infinitely many: (n^2 v + 4 * edge neighbours + diagonal neighbours) / (n (n + 5)), n the
+ * vertex's valence. The smooth limit surface, at this mesh's density.
+ */
+function toLimit({ P, W, F, nb }) {
+  const nv = P.length / 3, n = new Int32Array(nv), EP = new Float64Array(nv * 3), DP = new Float64Array(nv * 3), EW = new Float32Array(nv * nb), DW = new Float32Array(nv * nb);
+  for (const f of F) for (let k = 0; k < 4; k++) {
+    const v = f[k], a = f[(k + 1) % 4], b = f[(k + 3) % 4], d = f[(k + 2) % 4];
+    n[v]++;
+    for (let c = 0; c < 3; c++) { EP[v * 3 + c] += (P[a * 3 + c] + P[b * 3 + c]) / 2; DP[v * 3 + c] += P[d * 3 + c]; }
+    for (let c = 0; c < nb; c++) { EW[v * nb + c] += (W[a * nb + c] + W[b * nb + c]) / 2; DW[v * nb + c] += W[d * nb + c]; }
+  }
+  const LP = new Float64Array(P.length), LW = new Float32Array(W.length);
+  for (let v = 0; v < nv; v++) {
+    const k = n[v], q = k * (k + 5);
+    if (!k) { for (let c = 0; c < 3; c++) LP[v * 3 + c] = P[v * 3 + c]; continue; }
+    for (let c = 0; c < 3; c++) LP[v * 3 + c] = (k * k * P[v * 3 + c] + 4 * EP[v * 3 + c] + DP[v * 3 + c]) / q;
+    for (let c = 0; c < nb; c++) LW[v * nb + c] = (k * k * W[v * nb + c] + 4 * EW[v * nb + c] + DW[v * nb + c]) / q;
+  }
+  return { P: LP, W: LW, F, nb };
+}
+
+/** The centre (x, z) of a ring list at height y. */
+function centreAt(rings, y) {
+  for (let i = 0; i < rings.length - 1; i++) {
+    const a = rings[i], b = rings[i + 1];
+    if ((y - a.y) * (y - b.y) > 0 || a.y === b.y) continue;
+    const t = (y - a.y) / (b.y - a.y);
+    return [lerp(a.x || 0, b.x || 0, t), lerp(a.z || 0, b.z || 0, t)];
+  }
+  const e = Math.abs(y - rings[0].y) < Math.abs(y - rings[rings.length - 1].y) ? rings[0] : rings[rings.length - 1];
+  return [e.x || 0, e.z || 0];
+}
+
+/** A ring's parameters at height y, interpolated between the rings either side (clamped at the ends). */
+function ringAt(rings, y) {
+  const first = rings[0], last = rings[rings.length - 1], up = last.y > first.y;
+  const dz = (g, k) => g[k] != null ? g[k] : g.rz;
+  const of = (g) => ({ y, rx: g.rx, rz: g.rz, rzF: dz(g, 'rzF'), rzB: dz(g, 'rzB'), x: g.x || 0, z: g.z || 0, sq: g.sq || 2, w: g.w });
+  if (up ? y <= first.y : y >= first.y) return of(first);
+  if (up ? y >= last.y : y <= last.y) return of(last);
+  for (let i = 0; i < rings.length - 1; i++) {
+    const a = rings[i], b = rings[i + 1];
+    if ((y - a.y) * (y - b.y) > 0 || a.y === b.y) continue;
+    const t = (y - a.y) / (b.y - a.y);
+    return {
+      y, rx: lerp(a.rx, b.rx, t), rz: lerp(a.rz, b.rz, t), rzF: lerp(dz(a, 'rzF'), dz(b, 'rzF'), t), rzB: lerp(dz(a, 'rzB'), dz(b, 'rzB'), t),
+      x: lerp(a.x || 0, b.x || 0, t), z: lerp(a.z || 0, b.z || 0, t), sq: lerp(a.sq || 2, b.sq || 2, t), w: blendWeights(a.w, b.w, t),
+    };
+  }
+  return of(last);
+}
+
+/**
+ * Make the faces of a closed polygon mesh wind the same way (each shared edge runs opposite ways
+ * in its two faces), outward: flip everything if the enclosed volume comes out negative.
+ */
+function orientFaces(P, F) {
+  const nv = P.length / 3, byEdge = new Map(), key = (a, b) => a < b ? a * nv + b : b * nv + a;
+  F.forEach((f, i) => f.forEach((a, k) => { const kk = key(a, f[(k + 1) % f.length]); (byEdge.get(kk) || byEdge.set(kk, []).get(kk)).push(i); }));
+  const seen = new Uint8Array(F.length);
+  for (let s = 0; s < F.length; s++) {
+    if (seen[s]) continue;
+    seen[s] = 1;
+    const queue = [s];
+    while (queue.length) {
+      const f = F[queue.pop()];
+      for (let k = 0; k < f.length; k++) {
+        const a = f[k], b = f[(k + 1) % f.length];
+        for (const gi of byEdge.get(key(a, b))) {
+          if (seen[gi]) continue;
+          const g = F[gi], ia = g.indexOf(a);
+          if (g[(ia + 1) % g.length] === b) g.reverse();
+          seen[gi] = 1;
+          queue.push(gi);
+        }
+      }
+    }
+  }
+  let vol = 0;
+  for (const f of F) for (let k = 1; k < f.length - 1; k++) {
+    const a = f[0] * 3, b = f[k] * 3, c = f[k + 1] * 3;
+    vol += P[a] * (P[b + 1] * P[c + 2] - P[b + 2] * P[c + 1]) - P[a + 1] * (P[b] * P[c + 2] - P[b + 2] * P[c]) + P[a + 2] * (P[b] * P[c + 1] - P[b + 1] * P[c]);
+  }
+  if (vol < 0) for (const f of F) f.reverse();
+}
+
+/**
+ * One Catmull-Clark step. P: positions (3 per vertex), W: bone weights (nb per vertex), F: faces as
+ * index lists of any length. Returns the refined mesh, all quads: the vertices first, then one per
+ * edge, then one per face. Weights are averaged with the same rules as positions.
+ */
+function catmullClark({ P, W, F, nb }) {
+  const nv = P.length / 3, nf = F.length;
+  const FP = new Float64Array(nf * 3), FW = new Float32Array(nf * nb);
+  for (let f = 0; f < nf; f++) {
+    const face = F[f], k = 1 / face.length;
+    for (const v of face) {
+      for (let c = 0; c < 3; c++) FP[f * 3 + c] += P[v * 3 + c] * k;
+      for (let b = 0; b < nb; b++) FW[f * nb + b] += W[v * nb + b] * k;
+    }
+  }
+  const edgeOf = new Map(), EV = [], EF = [], FE = [];
+  for (let f = 0; f < nf; f++) {
+    const face = F[f], n = face.length, fe = new Array(n);
+    for (let k = 0; k < n; k++) {
+      const a = face[k], b = face[(k + 1) % n], key = a < b ? a * nv + b : b * nv + a;
+      let e = edgeOf.get(key);
+      if (e === undefined) { e = EV.length / 2; edgeOf.set(key, e); EV.push(a, b); EF.push(f, -1); } else EF[e * 2 + 1] = f;
+      fe[k] = e;
+    }
+    FE.push(fe);
+  }
+  const ne = EV.length / 2, n = nv + ne + nf;
+  const NP = new Float64Array(n * 3), NW = new Float32Array(n * nb);
+  const QP = new Float64Array(nv * 3), RP = new Float64Array(nv * 3), QW = new Float32Array(nv * nb), RW = new Float32Array(nv * nb);
+  const nF = new Int32Array(nv), nE = new Int32Array(nv), rim = new Uint8Array(nv);
+  for (let e = 0; e < ne; e++) {
+    const a = EV[e * 2], b = EV[e * 2 + 1], f0 = EF[e * 2], f1 = EF[e * 2 + 1], o = nv + e;
+    for (let c = 0; c < 3; c++) {
+      const m = (P[a * 3 + c] + P[b * 3 + c]) / 2;
+      NP[o * 3 + c] = f1 >= 0 ? (m + (FP[f0 * 3 + c] + FP[f1 * 3 + c]) / 2) / 2 : m;
+      RP[a * 3 + c] += m; RP[b * 3 + c] += m;
+    }
+    for (let bi = 0; bi < nb; bi++) {
+      const m = (W[a * nb + bi] + W[b * nb + bi]) / 2;
+      NW[o * nb + bi] = f1 >= 0 ? (m + (FW[f0 * nb + bi] + FW[f1 * nb + bi]) / 2) / 2 : m;
+      RW[a * nb + bi] += m; RW[b * nb + bi] += m;
+    }
+    nE[a]++; nE[b]++;
+    if (f1 < 0) rim[a] = rim[b] = 1;
+  }
+  for (let f = 0; f < nf; f++) {
+    const o = nv + ne + f;
+    for (let c = 0; c < 3; c++) NP[o * 3 + c] = FP[f * 3 + c];
+    for (let b = 0; b < nb; b++) NW[o * nb + b] = FW[f * nb + b];
+    for (const v of F[f]) {
+      nF[v]++;
+      for (let c = 0; c < 3; c++) QP[v * 3 + c] += FP[f * 3 + c];
+      for (let b = 0; b < nb; b++) QW[v * nb + b] += FW[f * nb + b];
+    }
+  }
+  for (let v = 0; v < nv; v++) {
+    const k = nE[v];
+    if (!k || rim[v]) {
+      for (let c = 0; c < 3; c++) NP[v * 3 + c] = P[v * 3 + c];
+      for (let b = 0; b < nb; b++) NW[v * nb + b] = W[v * nb + b];
+      continue;
+    }
+    for (let c = 0; c < 3; c++) NP[v * 3 + c] = (QP[v * 3 + c] / nF[v] + 2 * RP[v * 3 + c] / k + (k - 3) * P[v * 3 + c]) / k;
+    for (let b = 0; b < nb; b++) NW[v * nb + b] = (QW[v * nb + b] / nF[v] + 2 * RW[v * nb + b] / k + (k - 3) * W[v * nb + b]) / k;
+  }
+  const NF = [];
+  for (let f = 0; f < nf; f++) {
+    const face = F[f], fe = FE[f], m = face.length;
+    for (let k = 0; k < m; k++) NF.push([face[k], nv + fe[k], nv + ne + f, nv + fe[(k - 1 + m) % m]]);
+  }
+  return { P: NP, W: NW, F: NF, nb };
 }
 
 // ---------- head, face, hair ----------
@@ -2397,7 +2803,7 @@ const OUTLINE_FS = `
     #include <colorspace_fragment>
   }`;
 
-// Toon ramp for the direct light, indexed by dotNL * 0.5 + 0.5: three soft bands at 0.26 (turned
+// Toon ramp for the direct light, indexed by dotNL * 0.5 + 0.5: three soft bands at 0.22 (turned
 // away), 0.64 and 1.0 (facing the sun), with 0.08-wide transitions. Linear filtering over 32 texels.
 let RAMP = null;
 function toonRamp() {
@@ -2405,7 +2811,7 @@ function toonRamp() {
   const T = E(), N = 32, d = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
     const x = (i + 0.5) / N;
-    d[i] = Math.round(255 * (0.26 + 0.38 * sstep(0.44, 0.52, x) + 0.36 * sstep(0.64, 0.72, x)));
+    d[i] = Math.round(255 * (0.22 + 0.42 * sstep(0.44, 0.52, x) + 0.36 * sstep(0.64, 0.72, x)));
   }
   RAMP = new T.DataTexture(d, N, 1, T.RedFormat);
   RAMP.minFilter = RAMP.magFilter = T.LinearFilter;
@@ -2420,6 +2826,7 @@ function toonRamp() {
 //           replaced by a reflection picked by the world-space reflection vector's height: sky
 //           (albedo x1.1 plus a little blue-grey) above, ground (albedo x0.42) below, a dark horizon
 //           band (albedo x0.15) between them
+//   cloth   a weave (sin x sin at 300 per unit, +-6%), faded out by fwidth below ~2 px a thread
 //   chain   ring pattern on the bind-pose position (rows offset by half a ring), faded out by
 //           fwidth when a ring is under ~3 px, highlight pow 14 x0.5
 //   hair    streaks around the head's vertical axis (30 per turn, x0.8..1.0, faded by fwidth), and a
@@ -2427,7 +2834,8 @@ function toonRamp() {
 //   gloss   pow 50 x0.7 (eyes, tusks, crystals)
 //   leather pow 10 x0.12
 //   skin    pow 12 x0.05, plus a warm floor of 8% of the albedo in red, 3% green
-//   all     rim = (1 - N.V)^3, sky-tinted, x0.3
+//   all     form: x0.8 turned away from KEY up to x1.04 facing it (not gloss); rim = (1 - N.V)^3,
+//           sky-tinted, x0.3
 const STYLE_VS = 'attribute float surf;\nvarying float vSurf;\nvarying vec3 vBind;';
 const STYLE_COLOUR = `
   float fMetal = 1.0 - step(0.5, abs(vSurf - 3.0));
@@ -2450,6 +2858,11 @@ const STYLE_COLOUR = `
     float hf = 1.0 - smoothstep(0.35, 0.7, fwidth(ha));
     diffuseColor.rgb *= mix(1.0, 0.8 + 0.2 * sin(ha), hf);
   }
+  if (vSurf < 0.5) {
+    vec2 wq = vec2((vBind.x + vBind.z) * 300.0, vBind.y * 300.0);
+    float wf = 1.0 - smoothstep(0.35, 0.8, fwidth(wq.y));
+    diffuseColor.rgb *= 1.0 + 0.06 * sin(wq.x) * sin(wq.y) * wf;
+  }
   diffuseColor.rgb *= mix(1.0, 0.75, fMetal);`;
 const STYLE_LIGHT = `
   {
@@ -2470,6 +2883,7 @@ const STYLE_LIGHT = `
       outgoingLight = mix(outgoingLight, env + outgoingLight * 0.35, 0.6);
     }
     outgoingLight += spec * mix(vec3(1.0), fAlbedo * 1.6 + 0.2, fMetal * 0.6);
+    outgoingLight *= mix(1.0, mix(0.8, 1.04, smoothstep(-0.35, 0.65, dot(nV, normalize(vec3(-0.4, 0.62, 0.68))))), 1.0 - fGloss);
     outgoingLight += fSkin * fAlbedo * vec3(0.08, 0.03, 0.0);
     outgoingLight += pow(1.0 - ndv, 3.0) * (0.3 + 0.6 * fMetal) * vec3(0.55, 0.62, 0.75);
   }`;
