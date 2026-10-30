@@ -98,6 +98,7 @@ const rate = (state, a, b) => 0.35 + 0.85 * affinity(state, a, b);
 const EVENTS = {
   shift:    { w: 0.06, label: 'worked the same post' },
   lodging:  { w: 0.15, label: 'under the same roof' },
+  tavern:   { w: 0.12, label: 'drank at the same table' },
   trained:  { w: 0.10, label: 'drilled together' },
   mission:  { w: 4.0,  label: 'walked out together' },
   won:      { w: 1.5,  label: 'a job well done' },

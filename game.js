@@ -273,6 +273,9 @@ const plotsUsed = () => Object.keys(BUILDINGS).length + Lodging.plotsUsed(state)
 function canBuildLodging(type) {
   const def = LODGINGS[type];
   if (!def) return { ok: false, why: 'no such lodging' };
+  const fl = def.floor || 0;
+  if (!Floors.isOpen(state, fl)) return { ok: false, why: `needs the ${Floors.FLOORS[fl].name} (town tier ${fl + 1}, ${TOWN[fl].name})` };
+  if (def.tavern && Lodging.ensure(state).some(l => l.type === type)) return { ok: false, why: `one ${def.label.toLowerCase()} per town` };
   if (plotsUsed() + def.plots > plotsTotal()) return { ok: false, why: 'no room left on this plateau' };
   if (!Econ.canAfford(state, def.cost)) return { ok: false, why: 'not enough resources' };
   return { ok: true };
@@ -280,9 +283,10 @@ function canBuildLodging(type) {
 function addLodging(type) {
   const gate = canBuildLodging(type);
   if (!gate.ok) return gate;
-  const res = Lodging.build(state, type);
+  const d = LODGINGS[type];
+  const res = Lodging.build(state, type, { floor: d.floor || 0 });
   if (!res.ok) return res;
-  logLine(`🚧 Ordered a ${LODGINGS[type].label.toLowerCase()}: site open, ${LODGINGS[type].work} builder-ticks of work, ${LODGINGS[type].beds} beds when done`);
+  logLine(`🚧 Ordered a ${d.label.toLowerCase()} on the ${Floors.FLOORS[d.floor || 0].name}: site open, ${d.work} builder-ticks of work, ${d.tavern ? `morale +${d.morale} for standing ${Floors.FLOORS[d.floor].need}+ when done` : `${d.beds} beds when done`}`);
   save(); renderAll();
   return res;
 }
@@ -315,13 +319,14 @@ const spareJob = (k) => !!JOBS[k] && !JOBS[k].building && JOBS[k].kind !== 'trai
 function tickConstruction() {
   for (const e of Lodging.construct(state, { spareJob, release: (c) => setJob(c.id, null) })) {
     const d = LODGINGS[e.inst.type];
-    logLine(`${d.icon} ${d.label} finished: ${d.beds} beds open. Built by ${e.crew.map(c => c.name).join(', ') || 'nobody this tick'}`);
+    const opens = d.tavern ? `open to standing ${Floors.FLOORS[d.floor].need}+, morale +${d.morale} while resting` : `${d.beds} beds open`;
+    logLine(`${d.icon} ${d.label} finished on the ${Floors.FLOORS[e.inst.floor || 0].name}: ${opens}. Built by ${e.crew.map(c => c.name).join(', ') || 'nobody this tick'}`);
   }
   if (state.ticks % AUTO_HOUSE_EVERY) return;
   const pick = Lodging.autoPlan(state, (t) => canBuildLodging(t).ok);
   if (!pick) return;
   const d = LODGINGS[pick.type];
-  const res = Lodging.build(state, pick.type, { by: 'town' });
+  const res = Lodging.build(state, pick.type, { by: 'town', floor: d.floor || 0 });
   if (res.ok) logLine(`🔨 The town started a ${d.label.toLowerCase()}: ${pick.short} sleeping outside beyond the beds already under construction; paid ${Econ.costText(d.cost)}, each at most half the stock`);
 }
 const housed = (c) => Lodging.housed(state, c);
@@ -352,7 +357,16 @@ function upgradeTown() {
   if (!canUpgradeTown().ok) return;
   Econ.pay(state, TOWN[state.town + 1].cost);
   state.town++;
-  logLine(`🏙️ Town grew into a ${TOWN[state.town].name}`);
+  logLine(`🏙️ Town grew into a${/^[AEIOU]/.test(TOWN[state.town].name) ? 'n' : ''} ${TOWN[state.town].name}`);
+  // the new tier is a new floor: say who may live there and what moves up onto it
+  const fl = Floors.FLOORS[Floors.top(state)];
+  if (Floors.top(state) === state.town) {
+    const up = Object.entries(BUILDINGS).filter(([, b]) => (b.floor || 0) === state.town).map(([k, b]) => `${b.icon} ${tierOf(k).name}`);
+    const homes = Object.values(LODGINGS).filter(d => (d.floor || 0) === state.town).map(d => `${d.icon} ${d.label}`);
+    logLine(`🪜 The ${fl.name} opens: standing ${fl.need}+ may live there (${Floors.admitted(state, state.town).length} of ${state.characters.length} now)` +
+      (up.length ? `; moving up: ${up.join(', ')}` : '') + (homes.length ? `; can now be built: ${homes.join(', ')}` : ''));
+  }
+  Lodging.invalidate(state);
   save();
 }
 
@@ -417,11 +431,16 @@ let company = new Map();        // character id -> everyone they are spending th
 /** The shift lists and the roof lists, built once and read by everybody on them. */
 function readCompany() {
   company = new Map();
-  const byJob = {}, byBed = {};
+  const byJob = {}, byBed = {}, byTavern = {};
   for (const c of state.characters) {
     if (c.mission) continue;
     if (c.job) (byJob[c.job] = byJob[c.job] || []).push(c);
     else if (c.building) (byJob['build:' + c.building] = byJob['build:' + c.building] || []).push(c);
+    else {
+      // resting: at the best tavern their standing lets them into (floors.js), if there is one
+      const t = Floors.tavernFor(state, c);
+      if (t) (byTavern[t.id] = byTavern[t.id] || []).push(c);
+    }
     const bed = Lodging.bedOf(state, c);
     if (bed) (byBed[bed.id] = byBed[bed.id] || []).push(c);
   }
@@ -432,14 +451,15 @@ function readCompany() {
     const home = g.filter(c => !c.job);
     if (home.length > 1) share(home);
   }
-  return { byJob, byBed };
+  for (const g of Object.values(byTavern)) if (g.length > 1) share(g);
+  return { byJob, byBed, byTavern };
 }
 
 const companyFor = (c) => company.get(c.id) || [];
 
 /** Everything a tick of living does to who likes whom. */
 function tickBonds(n) {
-  const { byJob, byBed } = readCompany();
+  const { byJob, byBed, byTavern } = readCompany();
   for (const [k, g] of Object.entries(byJob)) {
     if (g.length < 2) continue;
     Bonds.together(state, g, k === 'training' ? 'trained' : 'shift');
@@ -449,6 +469,7 @@ function tickBonds(n) {
       const home = g.filter(c => !c.job);
       if (home.length > 1) Bonds.together(state, home, 'lodging');
     }
+    for (const g of Object.values(byTavern)) if (g.length > 1) Bonds.together(state, g, 'tavern');
   }
   if (n % DRIFT_EVERY === 0) Bonds.drift(state);
 }
@@ -475,7 +496,9 @@ function tick(times = 1) {
       // of the rotation, and somebody on a mission is living it out there instead.
       if (!c.mission) {
         const before = Condition.isSpent(c);
-        Condition.tick(c, { job: job ? job.kind : (c.building ? 'build' : null), housed: housed(c), restMult: restFor(c), lodging: Lodging.moraleFor(state, c), fed: fedTown, social: Bonds.company(state, c, companyFor(c)) });
+        const resting = !job && !c.building;
+        Condition.tick(c, { job: job ? job.kind : (c.building ? 'build' : null), housed: housed(c), restMult: restFor(c), lodging: Lodging.moraleFor(state, c), fed: fedTown, social: Bonds.company(state, c, companyFor(c)),
+          station: Floors.station(state, c).v, tavern: resting ? Floors.tavernMorale(state, c) : 0 });
         // Innate abilities get the town tick too. Without this a facet can only ever fire while
         // somebody is being hit, which makes every generated ability a combat ability no matter what
         // the registry describes — the engine would be able to read a character's morale and never
@@ -1052,6 +1075,19 @@ function profLine(c, full = false) {
  * cast from if they cast at all. A card without these is a card that cannot tell you why the
  * farm is producing half of what it says on the tin.
  */
+/** Standing, term by term, and what it buys: the floor they may live on, the one they do, the tavern. */
+function standingLines(c) {
+  const st = Floors.standing(c), reach = Floors.reach(state, c), lives = Floors.livesOn(state, c);
+  const sta = Floors.station(state, c), tav = Floors.tavernFor(state, c);
+  const rows = st.parts.map(p => `<div class="gear"><i>${p.label}</i> ${p.v >= 0 ? '+' : ''}${p.v} <span class="sub">${p.why}</span></div>`).join('');
+  const next = Floors.FLOORS[reach + 1];
+  return `<div><b>${st.total}</b> standing · may live up to the <b>${Floors.FLOORS[reach].name}</b>${next ? ` <span class="sub">(${next.name} needs ${next.need}${Floors.isOpen(state, reach + 1) ? '' : `, opens at ${TOWN[reach + 1].name}`})</span>` : ''}</div>
+    ${rows}
+    <div class="sub">Lives on the ${Floors.FLOORS[lives].name}${sta.short ? `: ${sta.short} floor${sta.short === 1 ? '' : 's'} below their standing, morale ${sta.v.toFixed(1)} = −${Floors.STATION_PER_FLOOR} × ${sta.short} × (1 + appetite ${sta.tilt.toFixed(2)})` : ''}.
+    ${tav ? `Drinks at the ${LODGINGS[tav.type].label} when resting: morale +${LODGINGS[tav.type].morale}.` : 'No tavern they may enter.'}</div>
+    <div class="controls"><span class="sub">Grant</span> <button class="ghost" data-grant="-1">−</button> <b>${c.standingGrant || 0}</b> <button class="ghost" data-grant="1">+</button></div>`;
+}
+
 function condLine(c) {
   const d = Condition.describe(c);
   const bar = (label, frac, color, text) =>
@@ -1407,7 +1443,17 @@ function openSheet(c) {
     sec('Carrying', gearLines(c)) +
     sec('Knows', knowledgeLines(c)) +
     sec('Company', relationLines(c)) +
+    sec('Standing', standingLines(c)) +
     sec('Record', recordLines(c));
+
+  for (const btn of right.querySelectorAll('[data-grant]')) {
+    btn.addEventListener('click', () => {
+      c.standingGrant = Math.max(-Floors.GRANT_MAX, Math.min(Floors.GRANT_MAX, (c.standingGrant || 0) + +btn.dataset.grant));
+      Lodging.invalidate(state);
+      save();
+      openSheet(c);
+    });
+  }
 
   // the controls that used to sit on the roster card
   const controls = document.createElement('div');
@@ -1559,20 +1605,23 @@ function lodgingYard() {
   shopHead.className = 'fold';
   shopHead.style.fontSize = '13px';
   shopHead.style.margin = '10px 0 0';
-  shopHead.innerHTML = `<span class="caret">${lodgeShopOpen ? '▾' : '▸'}</span> Build a lodging <span class="sub">${Object.keys(LODGINGS).length} kinds</span>`;
+  shopHead.innerHTML = `<span class="caret">${lodgeShopOpen ? '▾' : '▸'}</span> Build a lodging or tavern <span class="sub">${Object.keys(LODGINGS).length} kinds, by floor</span>`;
   shopHead.addEventListener('click', () => { lodgeShopOpen = !lodgeShopOpen; renderTown(); });
   box.append(shopHead);
   const shop = document.createElement('div');
   shop.className = 'grid';
   shop.hidden = !lodgeShopOpen;
-  for (const [type, d] of Object.entries(LODGINGS)) {
+  const byFloor = Object.entries(LODGINGS).sort(([, a], [, b]) => (a.floor || 0) - (b.floor || 0) || (a.tavern ? 1 : 0) - (b.tavern ? 1 : 0));
+  for (const [type, d] of byFloor) {
     const gate = canBuildLodging(type);
     const have = Lodging.ensure(state).filter(l => l.type === type).length;
+    const fl = Floors.FLOORS[d.floor || 0];
     const card = document.createElement('div');
     card.className = 'bcard';
     card.innerHTML = `<h3>${d.icon} ${d.label}${have ? ` <span class="sub">×${have}</span>` : ''}</h3>
       <div class="sub">${d.desc}</div>
-      <div class="sub">${d.beds} beds · rest ×${d.rest.toFixed(2)} · morale ${d.morale >= 0 ? '+' : ''}${d.morale} · ${d.plots} plot${d.plots === 1 ? '' : 's'}</div>
+      <div class="sub"><b>${fl.name}</b>${fl.need ? ` · standing ${fl.need}+ (${Floors.admitted(state, d.floor).length} of ${state.characters.length} qualify)` : ' · anyone'}</div>
+      <div class="sub">${d.tavern ? `tavern · morale +${d.morale} while resting · ${d.plots} plot` : `${d.beds} beds · rest ×${d.rest.toFixed(2)} · morale ${d.morale >= 0 ? '+' : ''}${d.morale} · ${d.plots} plot${d.plots === 1 ? '' : 's'}`}</div>
       <div class="sub">${d.work} builder-ticks to build</div>
       <div class="upgrade"><button ${gate.ok ? '' : 'disabled'} title="${gate.why || ''}">Order</button><div class="sub">${Econ.costText(d.cost)}</div>${gate.ok ? '' : `<div class="sub warn">${gate.why}</div>`}</div>`;
     card.querySelector('button').addEventListener('click', () => addLodging(type));
@@ -1588,7 +1637,7 @@ function lodgingYard() {
   head.style.marginTop = '12px';
   const label = document.createElement('span');
   label.className = 'sub';
-  label.innerHTML = `<b>Standing</b> — ${sum.buildings.length} building${sum.buildings.length === 1 ? '' : 's'}. Set the rules and the town billets everyone inside them.`;
+  label.innerHTML = `<b>Built</b> — ${sum.buildings.length} building${sum.buildings.length === 1 ? '' : 's'}. Set the rules and the town billets everyone inside them, highest standing first.`;
   head.append(label);
   const allBtn = document.createElement('button');
   allBtn.className = 'ghost';
@@ -1603,7 +1652,7 @@ function lodgingYard() {
 
   const yardGrid = document.createElement('div');
   yardGrid.className = 'grid';
-  for (const b of sum.buildings) yardGrid.append(b.site ? siteCard(b) : lodgingCard(b));
+  for (const b of sum.buildings) yardGrid.append(b.site ? siteCard(b) : b.tavern ? tavernCard(b) : lodgingCard(b));
   box.append(yardGrid);
 
   if (sum.outside.length) {
@@ -1628,8 +1677,9 @@ function autoHouseBox() {
   const short = Lodging.plan(state).outside.length - Lodging.pendingBeds(state);
   div.innerHTML = `<label><input type="checkbox" id="auto-house" ${pol.on ? 'checked' : ''}> <b>The town builds on its own</b></label>
     — every ${AUTO_HOUSE_EVERY} ticks: if (sleeping outside − beds under construction) &gt; 0, start the cheapest checked type that covers it, paid only when each resource in its cost is at most half the stock; one town-started site at a time. Now: ${Math.max(0, short)} uncovered.
-    <div class="filters" style="margin-top:4px">${Object.entries(LODGINGS).map(([t, d]) =>
-      `<label><input type="checkbox" data-auto-type="${t}" ${pol.types.includes(t) ? 'checked' : ''} ${pol.on ? '' : 'disabled'}> ${d.icon} ${d.label}</label>`).join(' ')}</div>`;
+    Only types on a floor everyone sleeping outside may live on.
+    <div class="filters" style="margin-top:4px">${Object.entries(LODGINGS).filter(([, d]) => !d.tavern).map(([t, d]) =>
+      `<label><input type="checkbox" data-auto-type="${t}" ${pol.types.includes(t) ? 'checked' : ''} ${pol.on ? '' : 'disabled'}> ${d.icon} ${d.label} <span class="sub">${Floors.FLOORS[d.floor || 0].name}</span></label>`).join(' ')}</div>`;
   div.querySelector('#auto-house').addEventListener('change', (e) => { pol.on = e.target.checked; save(); renderTown(); });
   for (const box of div.querySelectorAll('[data-auto-type]')) {
     box.addEventListener('change', (e) => {
@@ -1662,6 +1712,23 @@ function siteCard(b) {
   return card;
 }
 
+/** A finished tavern: who may drink there and who is drinking there now. */
+function tavernCard(b) {
+  const card = document.createElement('div');
+  card.className = 'bcard';
+  const fl = Floors.FLOORS[b.floor];
+  const patrons = state.characters.filter(c => !c.mission && !c.job && !c.building && (Floors.tavernFor(state, c) || {}).id === b.id);
+  card.innerHTML = `<h3>${b.icon} ${b.label} <span class="sub">${fl.name}</span></h3>
+    <div class="sub">morale +${b.morale} for resting characters with standing ${fl.need}+ (${Floors.admitted(state, b.floor).length} qualify); each uses the highest tavern they may enter</div>
+    <div class="sub">${patrons.length ? `In now: ${patrons.map(c => c.name).join(', ')}` : '<span class="empty">nobody resting here now</span>'}</div>`;
+  const down = document.createElement('button');
+  down.className = 'ghost';
+  down.textContent = 'Pull down';
+  down.addEventListener('click', () => removeLodging(b.id));
+  card.append(down);
+  return card;
+}
+
 /**
  * One standing building. Folded it is four lines that still answer the only questions worth
  * asking at a glance — how full, how good, and who it is for; opened it is the rule editor and
@@ -1677,7 +1744,7 @@ function lodgingCard(b) {
   head.addEventListener('click', () => { if (open) lodgeOpen.delete(b.id); else lodgeOpen.add(b.id); renderTown(); });
   card.append(head);
   const meta = document.createElement('div');
-  meta.innerHTML = `<div class="sub">rest ×${b.rest.toFixed(2)} · morale ${b.morale >= 0 ? '+' : ''}${b.morale}</div>
+  meta.innerHTML = `<div class="sub">${Floors.FLOORS[b.floor].name}${b.floor ? ` (standing ${Floors.FLOORS[b.floor].need}+)` : ''} · rest ×${b.rest.toFixed(2)} · morale ${b.morale >= 0 ? '+' : ''}${b.morale}</div>
     <div class="sub"><b>Rules</b> ${b.ruleText}</div>`;
   card.append(meta);
 
@@ -1751,6 +1818,15 @@ function mountTownMap() {
   line.textContent = (out || 'nobody about') + (away ? `  ·  🌀 ${away} out through the gate` : '');
 }
 
+/** One line per floor: open or not, who may live there, who does. */
+function floorsLine() {
+  return Floors.FLOORS.map((f, k) => {
+    if (!Floors.isOpen(state, k)) return `<span class="sub" title="opens at town tier ${k + 1}">🔒 ${f.name} (${TOWN[k].name})</span>`;
+    const lives = state.characters.filter(c => Lodging.bedOf(state, c) && Floors.instFloor(Lodging.bedOf(state, c)) === k).length;
+    return `<span title="${k ? `standing ${f.need}+ may live here` : 'anyone may live here'}"><b style="color:${f.colour}">▲${k}</b> ${f.name}: ${k ? `standing ${f.need}+, ${Floors.admitted(state, k).length} qualify, ` : ''}${lives} live here</span>`;
+  }).join(' · ');
+}
+
 function renderTown() {
   mountTownMap();
   const el = $('#town');
@@ -1758,7 +1834,8 @@ function renderTown() {
   const tu = canUpgradeTown();
   el.innerHTML = `<div class="townhead">
     <div><h3>🏙️ ${TOWN[state.town].name} <span class="sub">town tier ${state.town + 1} / ${TOWN.length}</span></h3>
-    <div class="sub">Buildings can be raised up to the town tier. Plots ${plotsUsed().toFixed(2).replace(/\.00$/, '')}/${plotsTotal()} used. ${capacity()} beds for ${state.characters.length} · average rest ×${restMult().toFixed(2)}.</div></div>
+    <div class="sub">Buildings can be raised up to the town tier. Plots ${plotsUsed().toFixed(2).replace(/\.00$/, '')}/${plotsTotal()} used. ${capacity()} beds for ${state.characters.length} · average rest ×${restMult().toFixed(2)}.</div>
+    <div class="sub">${floorsLine()}</div></div>
     <div>${next ? `<button id="town-up" ${tu.ok ? '' : 'disabled'} title="${tu.why || ''}">Upgrade to ${next.name}</button><div class="sub">${Econ.costText(next.cost)}</div>` : '<span class="sub">Max tier</span>'}</div>
   </div>`;
   if (next) $('#town-up').addEventListener('click', () => { upgradeTown(); renderAll(); });

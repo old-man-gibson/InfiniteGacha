@@ -32,11 +32,17 @@
 // Who orders a site: the player (Town tab), or the town itself (autoPlan): when people sleep
 // outside beyond the beds already under construction, it starts the cheapest allowed type that
 // covers them, but only if every resource in the cost is at most half of what is in stock.
+//
+// Floors (floors.js). Every building records the floor it was ordered on (inst.floor). A
+// building on floor k admits only characters whose standing reaches k: a hard filter on top of
+// the player's rules. Billeting serves characters in order of standing, so the privileged pick
+// first. Taverns (LODGINGS tavern: true) live in this yard and are built the same way, with 0 beds.
 
 (() => {
 const E = () => (typeof Econ !== 'undefined') ? Econ : require('./economy.js');
 const CO = () => (typeof Condition !== 'undefined') ? Condition : (typeof require !== 'undefined' ? require('./condition.js') : null);
 const ST = () => (typeof Stats !== 'undefined') ? Stats : (typeof require !== 'undefined' ? require('./stats.js') : null);
+const FL = () => (typeof Floors !== 'undefined') ? Floors : (typeof require !== 'undefined' ? require('./floors.js') : null);
 const CL = () => (typeof Classes !== 'undefined') ? Classes : (typeof require !== 'undefined' ? require('./classes.js') : null);
 
 // ---------- rules ----------
@@ -78,8 +84,9 @@ const RULES = {
 
 const ruleList = (inst) => Object.entries(inst.rules || {}).filter(([k, v]) => RULES[k] && v !== null && v !== undefined && v !== '');
 
-/** Does this building take this character? Every rule on it has to say yes. */
+/** Does this building take this character? Its floor and every rule on it have to say yes. */
 function admits(inst, c, ctx) {
+  if ((inst.floor || 0) > 0 && ctx.reach && ctx.reach(c) < inst.floor) return false;
   for (const [k, v] of ruleList(inst)) if (!RULES[k].test(c, v, ctx)) return false;
   return true;
 }
@@ -110,12 +117,12 @@ let seq = 0;
  * Order a lodging. It goes up as a construction site unless `instant` (save migration). `by` is
  * 'order' for the player and 'town' for autoPlan, and is shown on the site.
  */
-function build(state, type, { free = false, instant = false, by = 'order' } = {}) {
+function build(state, type, { free = false, instant = false, by = 'order', floor = null } = {}) {
   const def = E().LODGINGS[type];
   if (!def) return { ok: false, why: 'no such lodging' };
   if (!free && !E().canAfford(state, def.cost)) return { ok: false, why: 'not enough resources' };
   if (!free) E().pay(state, def.cost);
-  const inst = { id: 'l' + Date.now().toString(36) + (seq++), type, rules: {}, built: Date.now() };
+  const inst = { id: 'l' + Date.now().toString(36) + (seq++), type, rules: {}, built: Date.now(), floor: floor == null ? (def.floor || 0) : floor };
   if (!instant && def.work) inst.site = { work: def.work, done: 0, by, started: Date.now() };
   ensure(state).push(inst);
   state.beds = null;                                   // the billet is stale the moment the yard changes
@@ -147,9 +154,13 @@ function contextOf(state) {
   const teams = state.teams || [];
   const byMember = new Map();
   for (const t of teams) for (const id of t.members) if (!byMember.has(id)) byMember.set(id, t.id);
+  const fl = FL();
+  const reachOf = new Map();
   return {
     teamOf: (c) => byMember.get(c.id) || null,
     teamName: (id) => (teams.find(t => t.id === id) || {}).name || 'a team',
+    // standing is worked out once per character per billet, not once per bed it is tried against
+    reach: fl ? (c) => { if (!reachOf.has(c.id)) reachOf.set(c.id, fl.reach(state, c)); return reachOf.get(c.id); } : null,
   };
 }
 
@@ -167,7 +178,10 @@ function billet(state) {
   const free = {};
   for (const l of yard) free[l.id] = bedsOf(l);
 
-  const order = state.characters.slice().sort((a, b) => b.stats.stars - a.stats.stars || a.id - b.id);
+  // highest standing first (floors.js), then stars, then seniority
+  const fl = FL();
+  const rank = new Map(state.characters.map(c => [c.id, fl ? fl.standing(c).total : c.stats.stars]));
+  const order = state.characters.slice().sort((a, b) => rank.get(b.id) - rank.get(a.id) || b.stats.stars - a.stats.stars || a.id - b.id);
   const beds = {};
   const outside = [];
   for (const c of order) {
@@ -213,7 +227,7 @@ function describe(state, inst) {
   const living = occupants(state, inst.id);
   return {
     id: inst.id, type: inst.type, label: t.label, icon: t.icon, desc: t.desc,
-    site: inst.site ? siteInfo(state, inst) : null,
+    site: inst.site ? siteInfo(state, inst) : null, floor: inst.floor || 0, tavern: !!t.tavern,
     beds: t.beds, rest: t.rest, morale: t.morale, plots: t.plots,
     used: living.length, occupants: living, rules: inst.rules || {}, ruleText: ruleText(inst, ctx),
   };
@@ -317,10 +331,14 @@ function autoPlan(state, canPlace = () => true) {
   const pol = autoPolicy(state);
   if (!pol.on) return null;
   if (sites(state).some(l => l.site.by === 'town')) return null;      // one town-started site at a time
-  const short = plan(state).outside.length - pendingBeds(state);
+  const outside = plan(state).outside;
+  const short = outside.length - pendingBeds(state);
   if (short <= 0) return null;
+  // only a type everyone outside may sleep in: no building a floor-2 cottage for a bunkhouse crowd
+  const fl = FL();
+  const lowest = fl ? Math.min(...outside.map(id => fl.reach(state, state.characters.find(c => c.id === id)))) : 0;
   const L = E().LODGINGS;
-  const ok = pol.types.filter(t => L[t] && canPlace(t) && affordsTwice(state, L[t].cost));
+  const ok = pol.types.filter(t => L[t] && !L[t].tavern && (L[t].floor || 0) <= lowest && canPlace(t) && affordsTwice(state, L[t].cost));
   if (!ok.length) return null;
   const total = (t) => Object.values(L[t].cost).reduce((a, v) => a + v, 0);
   const covers = ok.filter(t => L[t].beds >= short).sort((a, b) => total(a) - total(b));
@@ -338,9 +356,9 @@ function migrate(state) {
   ensure(state);
   const tier = (state.buildings && state.buildings.lodging) || 0;
   const OLD = ['bunkhouse', 'bunkhouse', 'longhouse', 'cottages', 'manor'];
-  build(state, OLD[Math.min(tier, OLD.length - 1)], { free: true, instant: true });
-  for (let i = 0; i < (tier > 1 ? tier : 0); i++) build(state, 'longhouse', { free: true, instant: true });
-  for (let i = 0; i < (state.tents || 0); i++) build(state, 'tent', { free: true, instant: true });
+  build(state, OLD[Math.min(tier, OLD.length - 1)], { free: true, instant: true, floor: 0 });
+  for (let i = 0; i < (tier > 1 ? tier : 0); i++) build(state, 'longhouse', { free: true, instant: true, floor: 0 });
+  for (let i = 0; i < (state.tents || 0); i++) build(state, 'tent', { free: true, instant: true, floor: 0 });
   state.beds = null;
   return true;
 }

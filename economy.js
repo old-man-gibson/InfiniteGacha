@@ -30,28 +30,47 @@ const JOBS = {
 // are a quarter of one each, so the old "one tent, one plot" squeeze is gone.
 // `work` is construction in builder-ticks: one builder at rate 1.0 for one tick (lodging.js
 // builderRate: STR 10, full stamina and morale) does 1. Beds open when the work is done.
+// `floor` is the floor it is built on (floors.js): it can be ordered once that floor is open, and
+// only characters whose standing reaches that floor may sleep in it.
+//
+// TAVERNS are entries with `tavern: true` and 0 beds. They are built like lodgings (a site,
+// builders, plots) but sleep nobody: a resting character uses the highest finished tavern their
+// standing lets them into, for `morale` on their morale target and company with the others there.
+// One of each per base.
 const LODGINGS = {
-  tent:      { label: 'Tent',       icon: '⛺',  beds: 2,  rest: 0.90, morale: -2, plots: 0.25, work: 12,
+  tent:      { label: 'Tent',       icon: '⛺',  beds: 2,  rest: 0.90, morale: -2, plots: 0.25, work: 12, floor: 0,
                desc: 'Canvas. Two people, barely, and four of them fit on one plot.',
                cost: { gems: 25, crops: 10 } },
-  bunkhouse: { label: 'Bunkhouse',  icon: '🏚️', beds: 10, rest: 0.95, morale: -5, plots: 1, work: 180,
+  bunkhouse: { label: 'Bunkhouse',  icon: '🏚️', beds: 10, rest: 0.95, morale: -5, plots: 1, work: 180, floor: 0,
                desc: 'Ten to a room. The cheapest way to get a roster under a roof, and it shows.',
                cost: { gems: 150, ore: 40, crops: 30 } },
-  longhouse: { label: 'Longhouse',  icon: '🏠',  beds: 6,  rest: 1.10, morale: 3,  plots: 1, work: 240,
+  longhouse: { label: 'Longhouse',  icon: '🏠',  beds: 6,  rest: 1.10, morale: 3,  plots: 1, work: 240, floor: 1,
                desc: 'One hall, one fire, six beds. The first lodging anyone is happy in.',
                cost: { gems: 260, crops: 60, ore: 50 } },
-  barracks:  { label: 'Barracks',   icon: '🏛️', beds: 12, rest: 1.05, morale: 6,  plots: 1.5, work: 420,
+  barracks:  { label: 'Barracks',   icon: '🏛️', beds: 12, rest: 1.05, morale: 6,  plots: 1.5, work: 420, floor: 1,
                desc: 'Built for a unit rather than a person. Set a team rule on it and it does what it is for.',
                cost: { gems: 520, ore: 160, crops: 90 } },
-  cottages:  { label: 'Cottages',   icon: '🏘️', beds: 4,  rest: 1.30, morale: 11, plots: 1, work: 360,
+  cottages:  { label: 'Cottages',   icon: '🏘️', beds: 4,  rest: 1.30, morale: 11, plots: 1, work: 360, floor: 2,
                desc: 'A door of your own. Four sleep very well.',
                cost: { gems: 750, crops: 160, ore: 110 } },
-  manor:     { label: 'Manor',      icon: '🏰',  beds: 6,  rest: 1.45, morale: 16, plots: 2, work: 1080,
+  manor:     { label: 'Manor',      icon: '🏰',  beds: 6,  rest: 1.45, morale: 16, plots: 2, work: 1080, floor: 3,
                desc: 'Six beds worth boasting about, on two plots and a great deal of money.',
                cost: { gems: 1800, crops: 400, ore: 400, herbs: 150 } },
-  sanctum:   { label: 'Sanctum',    icon: '⛩️', beds: 3,  rest: 1.60, morale: 22, plots: 1, work: 720,
+  sanctum:   { label: 'Sanctum',    icon: '⛩️', beds: 3,  rest: 1.60, morale: 22, plots: 1, work: 720, floor: 4,
                desc: 'Three people sleep better here than anywhere. Everyone else queues.',
                cost: { gems: 2600, herbs: 600, ore: 320 } },
+  alehouse:  { label: 'Alehouse',   icon: '🍺', tavern: true, beds: 0, rest: 1, morale: 4,  plots: 1, work: 150, floor: 1,
+               desc: 'Benches, a barrel and a fire. Resting characters with standing 3+ drink here: morale +4.',
+               cost: { gems: 300, crops: 80, ore: 30 } },
+  inn:       { label: 'Inn',        icon: '🏨', tavern: true, beds: 0, rest: 1, morale: 6,  plots: 1, work: 300, floor: 2,
+               desc: 'A proper common room with a cook. Standing 5+: morale +6.',
+               cost: { gems: 800, crops: 200, ore: 80, herbs: 40 } },
+  salon:     { label: 'Salon',      icon: '🎻', tavern: true, beds: 0, rest: 1, morale: 8,  plots: 1, work: 500, floor: 3,
+               desc: 'Music, cards and a long table. Standing 7+: morale +8.',
+               cost: { gems: 2000, crops: 400, ore: 150, herbs: 200 } },
+  crownhall: { label: 'Crown hall', icon: '👑', tavern: true, beds: 0, rest: 1, morale: 11, plots: 1, work: 800, floor: 4,
+               desc: 'The town feasts the people it is proudest of. Standing 9+: morale +11.',
+               cost: { gems: 4500, crops: 800, ore: 500, herbs: 400 } },
 };
 
 // Kept only so a save from before the lodging yard can be read and converted (lodging.js migrate).
@@ -59,43 +78,45 @@ const TENT = { capacity: 2, max: 10, cost: { gems: 25, crops: 10 } };
 
 // Buildings. Each tier: name, slots (workers), mult (gather output or quality bonus), cost to reach it.
 // Tier index 0 is the starting state. A building can't exceed the town tier.
+// `floor` is the floor it stands on once that floor is open (floors.js); until then it stands on
+// the highest open floor. Floor 0 is the produce floor.
 const BUILDINGS = {
-  farm: { label: 'Farm', icon: '🌾', kind: 'gather', job: 'farming', tiers: [
+  farm: { label: 'Farm', icon: '🌾', kind: 'gather', floor: 0, job: 'farming', tiers: [
     { name: 'Field',       slots: 2, mult: 1.0, cost: null },
     { name: 'Farmstead',   slots: 3, mult: 1.3, cost: { gems: 120, ore: 20 } },
     { name: 'Plantation',  slots: 5, mult: 1.7, cost: { gems: 350, ore: 80, herbs: 20 } },
     { name: 'Granary estate', slots: 7, mult: 2.2, cost: { gems: 800, ore: 200, herbs: 60 } },
     { name: 'Terraces',    slots: 10, mult: 3.0, cost: { gems: 1800, ore: 500, herbs: 150 } },
   ] },
-  mine: { label: 'Mine', icon: '⛏️', kind: 'gather', job: 'mining', tiers: [
+  mine: { label: 'Mine', icon: '⛏️', kind: 'gather', floor: 0, job: 'mining', tiers: [
     { name: 'Quarry',      slots: 2, mult: 1.0, cost: null },
     { name: 'Mine shaft',  slots: 3, mult: 1.3, cost: { gems: 120, crops: 20 } },
     { name: 'Deep mine',   slots: 5, mult: 1.7, cost: { gems: 350, crops: 80, herbs: 20 } },
     { name: 'Mining complex', slots: 7, mult: 2.2, cost: { gems: 800, crops: 200, herbs: 60 } },
     { name: 'Abyssal mine', slots: 10, mult: 3.0, cost: { gems: 1800, crops: 500, herbs: 150 } },
   ] },
-  garden: { label: 'Herb garden', icon: '🌿', kind: 'gather', job: 'foraging', tiers: [
+  garden: { label: 'Herb garden', icon: '🌿', kind: 'gather', floor: 0, job: 'foraging', tiers: [
     { name: 'Herb patch',  slots: 2, mult: 1.0, cost: null },
     { name: 'Garden',      slots: 3, mult: 1.3, cost: { gems: 120, crops: 20 } },
     { name: 'Greenhouse',  slots: 5, mult: 1.7, cost: { gems: 350, crops: 80, ore: 40 } },
     { name: 'Botanical grove', slots: 7, mult: 2.2, cost: { gems: 800, crops: 200, ore: 120 } },
     { name: 'Worldtree grove', slots: 10, mult: 3.0, cost: { gems: 1800, crops: 500, ore: 300 } },
   ] },
-  smithy: { label: 'Smithy', icon: '⚒️', kind: 'process', job: 'smithing', tiers: [
+  smithy: { label: 'Smithy', icon: '⚒️', kind: 'process', floor: 1, job: 'smithing', tiers: [
     { name: 'Anvil',       slots: 1, quality: 0, cost: null },
     { name: 'Forge',       slots: 2, quality: 1, cost: { gems: 200, ore: 40 } },
     { name: 'Smithy',      slots: 3, quality: 2, cost: { gems: 500, ore: 150, crops: 50 } },
     { name: 'Grand forge', slots: 5, quality: 3, cost: { gems: 1200, ore: 400, crops: 150 } },
     { name: 'Runeforge',   slots: 7, quality: 4, cost: { gems: 2500, ore: 900, crops: 300, herbs: 200 } },
   ] },
-  lab: { label: 'Alchemy lab', icon: '⚗️', kind: 'process', job: 'alchemy', tiers: [
+  lab: { label: 'Alchemy lab', icon: '⚗️', kind: 'process', floor: 1, job: 'alchemy', tiers: [
     { name: 'Cauldron',    slots: 1, quality: 0, cost: null },
     { name: 'Still',       slots: 2, quality: 1, cost: { gems: 200, herbs: 30 } },
     { name: 'Laboratory',  slots: 3, quality: 2, cost: { gems: 500, herbs: 120, ore: 50 } },
     { name: 'Athenaeum',   slots: 5, quality: 3, cost: { gems: 1200, herbs: 300, ore: 150 } },
     { name: 'Sanctum',     slots: 7, quality: 4, cost: { gems: 2500, herbs: 700, ore: 300, crops: 200 } },
   ] },
-  training: { label: 'Training grounds', icon: '🎯', kind: 'train', job: 'training', tiers: [
+  training: { label: 'Training grounds', icon: '🎯', kind: 'train', floor: 1, job: 'training', tiers: [
     { name: 'Sparring ring', slots: 2, mult: 1.0, cost: null },
     { name: 'Training yard', slots: 3, mult: 1.3, cost: { gems: 200, crops: 40, ore: 40 } },
     { name: 'Drill hall',    slots: 5, mult: 1.7, cost: { gems: 500, crops: 120, ore: 120 } },
@@ -106,14 +127,14 @@ const BUILDINGS = {
   // another. Tier 0 is free and standing on day one — the trade is always available, it just has
   // to be walked to. `share` scales everything a sacrifice carries across, so raising the altar
   // makes the same offering worth more. Flatten every share to 1 to make the tiers cosmetic.
-  altar: { label: 'Altar', icon: '⚱️', kind: 'altar', tiers: [
+  altar: { label: 'Altar', icon: '⚱️', kind: 'altar', floor: 2, tiers: [
     { name: 'Cairn',       share: 1.0,  cost: null },
     { name: 'Stone altar', share: 1.15, cost: { gems: 250, ore: 60, herbs: 20 } },
     { name: 'Ossuary',     share: 1.3,  cost: { gems: 600, ore: 200, herbs: 80 } },
     { name: 'Reliquary',   share: 1.5,  cost: { gems: 1400, ore: 450, herbs: 200, crops: 150 } },
     { name: 'Mausoleum',   share: 1.75, cost: { gems: 3000, ore: 1000, herbs: 450, crops: 400 } },
   ] },
-  kitchen: { label: 'Kitchen', icon: '🍲', kind: 'process', job: 'cooking', tiers: [
+  kitchen: { label: 'Kitchen', icon: '🍲', kind: 'process', floor: 1, job: 'cooking', tiers: [
     { name: 'Campfire',    slots: 1, quality: 0, cost: null },
     { name: 'Kitchen',     slots: 2, quality: 1, cost: { gems: 150, crops: 40 } },
     { name: 'Tavern',      slots: 3, quality: 2, cost: { gems: 400, crops: 150, ore: 40 } },
@@ -122,7 +143,8 @@ const BUILDINGS = {
   ] },
 };
 
-// Town tiers (plateaus). Buildings cannot be upgraded beyond the town tier index.
+// Town tiers (plateaus). Buildings cannot be upgraded beyond the town tier index. Each tier opens
+// one more floor: tier index = index of the highest open floor (floors.js FLOORS).
 // plots = building sites on the plateau; every building uses one, every extra tent uses one.
 // Every plateau gained a plot when the altar was added; without it, a building that is free and
 // always present would leave every existing town one tent slot short.

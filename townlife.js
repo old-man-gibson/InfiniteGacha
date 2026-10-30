@@ -15,7 +15,9 @@
 //   hurt or spent  →  their own bed, whichever lodging billeted them
 //   off shift      →  whoever they would rather be with. This is the ONE decision in the file
 //                     that is not already made somewhere else: a character with a close friend
-//                     also off shift goes and finds them, and everyone else drifts to the square.
+//                     also off shift goes and finds them, and everyone else drifts to the best
+//                     tavern their standing lets them into (floors.js), or the square if none.
+//                     Two friends meet at the best tavern both may enter.
 //
 // So the town at a glance is the roster at a glance. A row of people standing in the mine is a
 // mine that is fully staffed; a crowd in the square is a town with nothing to do; two people who
@@ -31,6 +33,7 @@ const BO = () => (typeof Bonds !== 'undefined') ? Bonds : (typeof require !== 'u
 const LO = () => (typeof Lodging !== 'undefined') ? Lodging : (typeof require !== 'undefined' ? require('./lodging.js') : null);
 const CO = () => (typeof Condition !== 'undefined') ? Condition : (typeof require !== 'undefined' ? require('./condition.js') : null);
 const R = () => (typeof Rng !== 'undefined') ? Rng : require('./rng.js');
+const FL = () => (typeof Floors !== 'undefined') ? Floors : (typeof require !== 'undefined' ? require('./floors.js') : null);
 
 const SPEED = 2.4;            // tiles a second: a walk, not a march
 const MILL_MIN = 3, MILL_MAX = 9;   // seconds between deciding to stand somewhere else
@@ -58,6 +61,11 @@ function whereTo(state, c, map) {
     if (p) return { goal: p.key };
   }
   // off shift. Somebody worth finding, if there is somebody worth finding and they are free too
+  const fl = FL();
+  const local = (limit = null) => {
+    const t = fl ? fl.tavernFor(state, c, limit) : null;
+    return t && map.plots['bed:' + t.id] ? 'bed:' + t.id : 'square';
+  };
   const bo = BO();
   if (bo) {
     const friend = bo.closestTo(state, c, state.characters);
@@ -68,12 +76,12 @@ function whereTo(state, c, map) {
       const fbed = lo ? lo.bedOf(state, friend.c) : null;
       const co = CO();
       const tired = co && co.isSpent(friend.c);
-      return { goal: tired && fbed ? 'bed:' + fbed.id : 'square', near: friend.c.id };
+      return { goal: tired && fbed ? 'bed:' + fbed.id : local(fl ? fl.reach(state, friend.c) : null), near: friend.c.id };
     }
   }
   const co = CO();
   if (co && co.isSpent(c) && home) return { goal: home };   // no company and no energy: go to bed
-  return { goal: home && R().chance(0.35) ? home : 'square' };
+  return { goal: home && R().chance(0.35) ? home : local() };
 }
 
 /** A tile inside this plot to stand on, avoiding the exact one somebody else already has. */

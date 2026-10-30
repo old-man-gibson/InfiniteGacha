@@ -4,7 +4,10 @@
 // fieldview.js (the zone and portal drawing, and the token follow).
 //
 // It also draws the home town (renderTown), from townmap.js's ground and townlife.js's walkers,
-// on the same terrain and scenery code with a style of its own.
+// on the same terrain and scenery code with a style of its own. The town's floors are raised
+// platforms: the terrain takes its height from BaseLayout.heightAt (the same function the walking
+// grid is cut from), and buildTown adds stone retaining walls along each platform's foot, stairs
+// between floors, and a plaza with a banner on each floor.
 //
 // This is a second way of DRAWING the same field state, not a second simulation. Nothing in
 // here writes to the field; it reads `s.map`, `s.seen`, `s.actors` and `s.portal` and turns
@@ -412,7 +415,7 @@ function create(cv, { fill = false } = {}) {
     };
 
     // town roads: distance to the layout's polylines, so a road is a smooth band, not tiles
-    const roadAt = map.layout ? layoutRoads(map.layout, map.offset) : null;
+    const roadAt = map.layout ? layoutRoads(map.layout, map.ox, map.oz) : null;
 
     // heights
     const nx = W * SUB + 1, nz = H * SUB + 1;
@@ -423,6 +426,7 @@ function create(cv, { fill = false } = {}) {
       let h = (fbm(px * 0.22 + so, pz * 0.22) - 0.5) * st.roll * 2 * (1 - m);
       if (st.hill) h += Math.pow(m, 0.8) * st.hill * (0.7 + 0.6 * fbm(px * 0.3 + so, pz * 0.3 + 40)) + m * m * (fbm(px * 1.4, pz * 1.4 + so) - 0.3) * 0.5;
       h -= rd * 0.04;
+      if (map.layout) h += BaseLayout.heightAt(map.layout, px - map.ox, pz - map.oz);
       heights[k] = h; wallness[k] = m; roadness[k] = rd;
     }
     const heightAt = (x, z) => {
@@ -471,6 +475,7 @@ function create(cv, { fill = false } = {}) {
       c.lerp(moss, sstep(0.55, 0.75, vnoise(px * 0.5, pz * 0.5 + so)) * 0.35);
       tmp.lerpColors(dirt, road, fbm(px * 0.6, pz * 0.6));
       c.lerp(tmp, sstep(0.3, 0.75, rd));
+      if (map.layout) c.lerp(rock, sstep(0.3, 0.65, slope));      // town: a platform's edge is rock
       if (st.hill) {
         c.lerp(top, sstep(0.55, 0.95, m) * 0.85);
         c.lerp(rock, sstep(0.16, 0.42, slope) * sstep(0.02, 0.15, m));
@@ -688,7 +693,7 @@ function create(cv, { fill = false } = {}) {
   }
 
   // ---------- the town ----------
-  // Built from map.layout (baselayout.js), not from tiles. A layout position plus map.offset is
+  // Built from map.layout (baselayout.js), not from tiles. A layout position plus (map.ox, map.oz) is
   // the tile space the walkers use. Each structure is a group in its own frame: origin at its
   // centre, local +z toward its door, rotation.y = the layout's rot (same convention as
   // BaseLayout.toWorld). Local width is the structure's w (x) and depth its h (z).
@@ -696,24 +701,47 @@ function create(cv, { fill = false } = {}) {
   // Look per structure is drawn from a stream seeded by (layout seed, key), so a given building
   // keeps its colours across reloads and two saves differ.
 
-  /** Road-ness at a terrain point: 1 on a road, falling to 0 over 0.65 tiles past its edge. */
-  function layoutRoads(lay, O) {
-    const segs = [];
+  /**
+   * Road-ness at a terrain point: 1 on a road, falling to 0 over 0.65 tiles past its edge. The
+   * segments and discs are bucketed in ROAD_CELL-tile cells, so a lookup tests only the nearby ones.
+   */
+  const ROAD_CELL = 6;
+  function layoutRoads(lay, OX, OZ) {
+    const segs = [], discs = [];
     for (const r of lay.roads) {
       for (let i = 0; i + 1 < r.pts.length; i++) {
-        segs.push([r.pts[i][0] + O, r.pts[i][1] + O, r.pts[i + 1][0] + O, r.pts[i + 1][1] + O, r.width / 2]);
+        segs.push([r.pts[i][0] + OX, r.pts[i][1] + OZ, r.pts[i + 1][0] + OX, r.pts[i + 1][1] + OZ, r.width / 2]);
       }
     }
-    const discs = [[O, O, lay.square.r], [lay.crystal.x + O, lay.crystal.z + O, lay.crystal.r]];
+    for (const st of lay.stairs || []) segs.push([st.a.x + OX, st.a.z + OZ, st.b.x + OX, st.b.z + OZ, st.w / 2]);
+    discs.push([OX, OZ, lay.square.r], [lay.crystal.x + OX, lay.crystal.z + OZ, lay.crystal.r],
+      ...(lay.plazas || []).map(pz => [pz.x + OX, pz.z + OZ, pz.r]));
+    const cells = new Map(), reach = 1.2;                      // the fade past a road's edge, rounded up
+    const key = (i, j) => i * 100003 + j;
+    const file = (item, x0, z0, x1, z1) => {
+      for (let i = Math.floor(x0 / ROAD_CELL); i <= Math.floor(x1 / ROAD_CELL); i++)
+        for (let j = Math.floor(z0 / ROAD_CELL); j <= Math.floor(z1 / ROAD_CELL); j++) {
+          const k = key(i, j);
+          if (!cells.has(k)) cells.set(k, { segs: [], discs: [] });
+          item(cells.get(k));
+        }
+    };
+    for (const sg of segs) {
+      const pad = sg[4] + reach;
+      file(c => c.segs.push(sg), Math.min(sg[0], sg[2]) - pad, Math.min(sg[1], sg[3]) - pad, Math.max(sg[0], sg[2]) + pad, Math.max(sg[1], sg[3]) + pad);
+    }
+    for (const dc of discs) file(c => c.discs.push(dc), dc[0] - dc[2] - reach, dc[1] - dc[2] - reach, dc[0] + dc[2] + reach, dc[1] + dc[2] + reach);
     return (px, pz) => {
+      const cell = cells.get(key(Math.floor(px / ROAD_CELL), Math.floor(pz / ROAD_CELL)));
+      if (!cell) return 0;
       let best = Infinity;
-      for (const [ax, az, bx, bz, half] of segs) {
+      for (const [ax, az, bx, bz, half] of cell.segs) {
         const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1;
         const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / l2));
         const d = Math.hypot(px - ax - dx * t, pz - az - dz * t) - half;
         if (d < best) best = d;
       }
-      for (const [cx, cz, r] of discs) best = Math.min(best, Math.hypot(px - cx, pz - cz) - r);
+      for (const [cx, cz, r] of cell.discs) best = Math.min(best, Math.hypot(px - cx, pz - cz) - r);
       return 1 - sstep(-0.3, 0.35, best);
     };
   }
@@ -723,7 +751,7 @@ function create(cv, { fill = false } = {}) {
   const TIMBER = '#6b4a2e', STONE = '#b9ad97';
 
   function buildTown(map, heightAt, root, so) {
-    const lay = map.layout, O = map.offset;
+    const lay = map.layout, OX = map.ox, OZ = map.oz;
     const mats = new Map();
     /** One material per look. Roof materials fade with uRoofCut. */
     const mat = (color, { roof = false, emissive = null, ei = 0.8, double = false, flat = false } = {}) => {
@@ -784,10 +812,10 @@ function create(cv, { fill = false } = {}) {
       geo.computeVertexNormals();
       return mesh(geo, roofM);
     }
-    function addWindow(g, x, y, z, ry) {
+    function addWindow(g, x, y, z, ry, glow = false) {
       const w = new THREE.Group();
       w.add(mesh(new THREE.BoxGeometry(0.54, 0.62, 0.04), mat('#efe6d2')));
-      const pane = mesh(new THREE.PlaneGeometry(0.42, 0.5), mat('#2b3240', { emissive: '#ffcf7a', ei: 0.18 }), 0, 0, 0.025);
+      const pane = mesh(new THREE.PlaneGeometry(0.42, 0.5), mat('#2b3240', { emissive: '#ffc06a', ei: glow ? 0.95 : 0.18 }), 0, 0, 0.025);
       w.add(pane);
       w.position.set(x, y, z);
       w.rotation.y = ry;
@@ -819,10 +847,10 @@ function create(cv, { fill = false } = {}) {
         const y = H * (k + 0.55) / storeys, n = Math.max(1, Math.floor(w / 2.3));
         for (let i = 0; i < n; i++) {
           const wx = (i - (n - 1) / 2) * (w / n);
-          addWindow(g, wx, y, -d / 2 - 0.02, Math.PI);
-          if (k > 0 || Math.abs(wx) > 1.0) addWindow(g, wx, y, d / 2 + 0.02, 0);
+          addWindow(g, wx, y, -d / 2 - 0.02, Math.PI, o.glow);
+          if (k > 0 || Math.abs(wx) > 1.0) addWindow(g, wx, y, d / 2 + 0.02, 0, o.glow);
         }
-        if (d >= 2.6) for (const sx of [-1, 1]) addWindow(g, sx * (w / 2 + 0.02), y, 0, sx * Math.PI / 2);
+        if (d >= 2.6) for (const sx of [-1, 1]) addWindow(g, sx * (w / 2 + 0.02), y, 0, sx * Math.PI / 2, o.glow);
       }
       const chimneys = [];
       if (!o.bare) {
@@ -868,6 +896,33 @@ function create(cv, { fill = false } = {}) {
       glow.scale.setScalar(1.6 * size);
       g.add(f, glow);
       world.flames.push({ f, glow, seed: Math.random() * 10, size });
+    }
+
+    /**
+     * A tavern's furnishing on top of its house: tables with benches inside (seen once the roofs
+     * fade), barrels at the back, lanterns by the door, a hanging sign in its floor's colour, and
+     * `columns` columns on a porch for the grander ones.
+     */
+    function tavern(h, w, d, colour, bare, columns) {
+      if (bare) return h;
+      const g = h.group, wood = mat('#7a5233');
+      for (const sx of [-1, 1]) {
+        const tx = sx * w / 4;
+        g.add(mesh(new THREE.BoxGeometry(1.0, 0.07, 0.62), wood, tx, 0.56, -0.1));
+        for (const lx of [-0.42, 0.42]) for (const lz of [-0.24, 0.24]) g.add(mesh(box(0.07, 0.53, 0.07), wood, tx + lx, 0, -0.1 + lz));
+        for (const bz of [-0.55, 0.35]) g.add(mesh(new THREE.BoxGeometry(1.0, 0.06, 0.24), wood, tx, 0.33, -0.1 + bz));
+        g.add(mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.55, 12).translate(0, 0.27, 0), mat('#6b4a2e'), sx * (w / 2 - 0.55), 0, -d / 2 + 0.55));
+        g.add(mesh(new THREE.BoxGeometry(0.2, 0.26, 0.2), mat('#ffd38a', { emissive: '#ffb04a', ei: 1.3 }), sx * 0.85, 1.55, d / 2 + 0.12));
+      }
+      g.add(mesh(box(0.08, 2.1, 0.08), mat(TIMBER), w / 2 + 0.35, 0, d / 2 + 0.1));
+      g.add(mesh(new THREE.BoxGeometry(0.6, 0.06, 0.06), mat(TIMBER), w / 2 + 0.1, 2.0, d / 2 + 0.1));
+      g.add(mesh(new THREE.BoxGeometry(0.5, 0.4, 0.05), mat(colour, { emissive: colour, ei: 0.25 }), w / 2 - 0.05, 1.7, d / 2 + 0.1));
+      for (let i = 0; i < columns; i++) {
+        const cx = (i / Math.max(1, columns - 1) - 0.5) * Math.min(w - 1, 3.2);
+        g.add(mesh(new THREE.CylinderGeometry(0.11, 0.13, 1.6, 10).translate(0, 0.8, 0), mat('#efe6d2'), cx, 0, d / 2 + 0.85));
+      }
+      if (columns) g.add(mesh(new THREE.BoxGeometry(Math.min(w - 0.6, 3.8), 0.14, 1.3), mat(colour === '#e0b84a' ? '#3f4a6b' : '#4d6c9a', { roof: true }), 0, 1.66, d / 2 + 0.6));
+      return h;
     }
 
     // ----- lodgings -----
@@ -930,6 +985,10 @@ function create(cv, { fill = false } = {}) {
           }
           return { group: g, top: 3.4, chimneys: [] };
         }
+        case 'alehouse': return tavern(house(w, d, { wallH: 1.4, roofH: 1.2, oh: 0.45, plaster: '#c8a878', timber: '#5a3a22', roof: '#b8944a', chimneys: 1, glow: true, bare }), w, d, '#c9963f', bare, 0);
+        case 'inn': return tavern(house(w, d, { wallH: 2.4, storeys: 2, roofH: 1.3, plaster: '#efe3c8', roof: '#a8452f', chimneys: 2, glow: true, bare }), w, d, '#5f8fc9', bare, 0);
+        case 'salon': return tavern(house(w, d, { wallH: 1.8, roofH: 1.0, plaster: '#f4efe4', timber: '#8a8f9a', roof: '#4d6c9a', glow: true, bare }), w, d, '#a45fc9', bare, 2);
+        case 'crownhall': return tavern(house(w, d, { wallH: 2.8, storeys: 2, roofH: 1.5, plaster: STONE, timber: '#7a6a4a', roof: '#3f4a6b', chimneys: 2, glow: true, bare }), w, d, '#e0b84a', bare, 4);
         default: return house(w, d, { wallH: 1.4, roofH: 1.0, plaster, roof, bare });
       }
     }
@@ -1075,7 +1134,7 @@ function create(cv, { fill = false } = {}) {
     // ----- structures -----
     for (const s of lay.structures) {
       const rnd = BaseLayout.mulberry32(BaseLayout.hashStr(s.key + ':look', lay.seed));
-      const x = s.x + O, z = s.z + O;
+      const x = s.x + OX, z = s.z + OZ;
       const built = s.kind === 'work' ? workshop(s, rnd) : s.kind === 'altar' ? altar(s, rnd) : s.site ? site(s, rnd) : lodging(s, rnd);
       const g = built.group;
       g.position.set(x, heightAt(x, z), z);
@@ -1095,17 +1154,20 @@ function create(cv, { fill = false } = {}) {
       world.signs.push({ mesh: b, icon, full });
     }
 
+    // ----- the floors: retaining walls at each platform's foot, stairs between floors, plazas -----
+    floorsOf(lay, OX, OZ, heightAt, root, mat, mesh, box);
+
     // ----- the square: fountain and lamps -----
     {
-      const gy = heightAt(O, O), stone = mat('#cfc4ad');
+      const gy = heightAt(OX, OZ), stone = mat('#cfc4ad');
       const f = new THREE.Group();
       f.add(mesh(new THREE.CylinderGeometry(1.15, 1.25, 0.35, 28, 1, true).translate(0, 0.175, 0), mat('#cfc4ad', { double: true })));
       const water = mesh(new THREE.CircleGeometry(1.1, 28).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: '#5fb6d8', emissive: '#1f5f7a', emissiveIntensity: 0.6 }), 0, 0.3, 0);
       f.add(water, mesh(new THREE.CylinderGeometry(0.14, 0.2, 0.9, 12).translate(0, 0.45, 0), stone), mesh(new THREE.CylinderGeometry(0.42, 0.18, 0.18, 16).translate(0, 0.95, 0), stone));
-      f.position.set(O, gy, O);
+      f.position.set(OX, gy, OZ);
       root.add(f);
       for (let i = 0; i < 6; i++) {
-        const a = (i + 0.5) / 6 * Math.PI * 2, lx = O + Math.sin(a) * (lay.square.r + 0.4), lz = O - Math.cos(a) * (lay.square.r + 0.4);
+        const a = (i + 0.5) / 6 * Math.PI * 2, lx = OX + Math.sin(a) * (lay.square.r + 0.4), lz = OZ - Math.cos(a) * (lay.square.r + 0.4);
         const lamp = new THREE.Group();
         lamp.add(mesh(box(0.08, 1.9, 0.08), mat('#3a3530')));
         lamp.add(mesh(new THREE.BoxGeometry(0.26, 0.3, 0.26), mat('#ffd38a', { emissive: '#ffb04a', ei: 1.2 }), 0, 2.0, 0));
@@ -1119,7 +1181,7 @@ function create(cv, { fill = false } = {}) {
 
     // ----- the crystal, north of the square -----
     {
-      const cx = lay.crystal.x + O, cz = lay.crystal.z + O, gy = heightAt(cx, cz);
+      const cx = lay.crystal.x + OX, cz = lay.crystal.z + OZ, gy = heightAt(cx, cz);
       const base = new THREE.Group();
       base.add(mesh(new THREE.CylinderGeometry(1.35, 1.6, 0.35, 8).translate(0, 0.175, 0), mat('#b3aa98', { flat: true })));
       base.add(mesh(new THREE.CylinderGeometry(0.9, 1.05, 0.3, 8).translate(0, 0.5, 0), mat('#cfc4ad', { flat: true })));
@@ -1143,7 +1205,7 @@ function create(cv, { fill = false } = {}) {
 
     // ----- the gate on the road out -----
     {
-      const gx = lay.gate.x + O, gz = lay.gate.z + O, gy = heightAt(gx, gz), wood = mat(TIMBER);
+      const gx = lay.gate.x + OX, gz = lay.gate.z + OZ, gy = heightAt(gx, gz), wood = mat(TIMBER);
       for (const dx of [-2.0, 2.0]) root.add(mesh(new THREE.BoxGeometry(0.34, 2.8, 0.34).translate(0, 1.4, 0), wood, gx + dx, gy, gz));
       root.add(mesh(new THREE.BoxGeometry(4.6, 0.3, 0.38), wood, gx, gy + 2.7, gz));
       root.add(mesh(new THREE.PlaneGeometry(0.8, 1.0), mat('#7a5cc0', { double: true }), gx, gy + 2.05, gz + 0.2));
@@ -1152,15 +1214,18 @@ function create(cv, { fill = false } = {}) {
     // ----- trees past the extent, and a little green inside it -----
     const trunks = [], canopy = [], bushes = [], blooms = [];
     const M4 = (x, y, z, sx, sy, sz, ry = 0) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ry), new THREE.Vector3(sx, sy, sz));
-    const near = (x, z) => lay.structures.some(s => Math.hypot(x - O - s.x, z - O - s.z) < s.r + 1.3)
-      || Math.hypot(x - O - lay.crystal.x, z - O - lay.crystal.z) < 3.4 || Math.hypot(x - O, z - O) < lay.square.r + 1.2;
-    const road = layoutRoads(lay, O);
+    const near = (x, z) => lay.structures.some(s => Math.hypot(x - OX - s.x, z - OZ - s.z) < s.r + 1.3)
+      || Math.hypot(x - OX - lay.crystal.x, z - OZ - lay.crystal.z) < 3.4 || Math.hypot(x - OX, z - OZ) < lay.square.r + 1.2;
+    const road = layoutRoads(lay, OX, OZ);
+    const onPlatform = (x, z) => { for (let k = 1; k <= lay.top; k++) if (BaseLayout.floorSdf(lay, k, x - OX, z - OZ) > -2.2) return true; return false; };
+    // forest starts 1.5 tiles past the built-up box and thickens over the next 5
+    const bx = lay.bounds;
+    const outside = (x, z) => Math.hypot(Math.max(bx.x0 - (x - OX), 0, (x - OX) - bx.x1), Math.max(bx.z0 - (z - OZ), 0, (z - OZ) - bx.z1));
     for (let ty = -MARGIN; ty < map.h + MARGIN; ty++) for (let tx = -MARGIN; tx < map.w + MARGIN; tx++) {
       const r1 = hash(tx * 3 + so, ty * 7), r2 = hash(tx * 11, ty * 5 + so), r3 = hash(tx + 99, ty - so);
       const x = tx + 0.5 + (r2 - 0.5) * 0.6, z = ty + 0.5 + (r3 - 0.5) * 0.6;
-      const dist = Math.hypot(x - O, z - O);
-      if (road(x, z) > 0.05) continue;
-      const out = (dist - lay.extent - 1.5) / 5;
+      if (road(x, z) > 0.05 || onPlatform(x, z)) continue;
+      const out = (outside(x, z) - 1.5) / 5;
       const gy = heightAt(x, z);
       if (out > 0 ? r1 < Math.min(1, out) * 0.6 : (!near(x, z) && r1 < 0.015)) {
         const sc = 0.8 + r2 * 0.7, hue = hash(tx, ty * 13);
@@ -1188,6 +1253,107 @@ function create(cv, { fill = false } = {}) {
     instanced(canopyGeo, mat('#ffffff'), bushes, (e) => new THREE.Color().lerpColors(new THREE.Color('#3d6e2a'), new THREE.Color('#5d8f34'), e.c));
     const BLOOM = ['#e86a9a', '#f2d04a', '#9a6ae8', '#ffffff'].map(c => new THREE.Color(c));
     instanced(new THREE.SphereGeometry(0.07, 6, 4), mat('#ffffff'), blooms, (e) => BLOOM[Math.floor(e.c * BLOOM.length) % BLOOM.length]);
+  }
+
+  /**
+   * The platforms' masonry. For each open floor: the outline of its platform at the cliff's foot
+   * (BaseLayout.floorSdf = -CLIFF, by marching squares on a WALL_STEP grid), and a wall along it
+   * from the ground outside up to the platform, with a merlon on about a third of the segments;
+   * open where a stair crosses. Then each stair as treads and side walls, and on each plaza a
+   * banner in the floor's colour (floors.js) and two lamps.
+   */
+  const WALL_STEP = 0.5;
+  function floorsOf(lay, OX, OZ, heightAt, root, mat, mesh, box) {
+    if (!lay.top) return;
+    const tex = paintTexture('stone');
+    world.textures.push(tex);
+    const wallM = patchMaterial(new THREE.MeshLambertMaterial({ color: '#ffffff', map: tex, vertexColors: true, side: THREE.DoubleSide }), U);
+    const stoneA = new THREE.Color('#b8aa90'), tmp = new THREE.Color();
+    const merlons = [];
+    for (let k = 1; k <= lay.top; k++) {
+      const F = lay.floors[k];
+      const sdf = (x, z) => BaseLayout.floorSdf(lay, k, x, z) + BaseLayout.CLIFF;
+      let { x0, x1, z0, z1 } = F.box;
+      x0 -= 2; z0 -= 2; x1 += 2; z1 += 2;
+      const nx = Math.ceil((x1 - x0) / WALL_STEP) + 1, nz = Math.ceil((z1 - z0) / WALL_STEP) + 1;
+      const v = new Float32Array(nx * nz);
+      for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) v[j * nx + i] = sdf(x0 + i * WALL_STEP, z0 + j * WALL_STEP);
+      const pos = [], nrm = [], col = [], uv = [];
+      const cut = (ax, az, av, bx, bz, bv) => { const t = av / (av - bv); return { x: ax + (bx - ax) * t, z: az + (bz - az) * t }; };
+      const top = F.elev + 0.12;
+      const segment = (p, q) => {
+        const mx = (p.x + q.x) / 2, mz = (p.z + q.z) / 2;
+        if (BaseLayout.onStair(lay, mx, mz, 0.35)) return;
+        // outward: down the gradient of the floor's distance field
+        const e = 0.05, gx = sdf(mx + e, mz) - sdf(mx - e, mz), gz = sdf(mx, mz + e) - sdf(mx, mz - e), gl = Math.hypot(gx, gz) || 1;
+        const ox = -gx / gl, oz = -gz / gl;
+        const foot = (pt) => heightAt(pt.x + OX + ox * 0.45, pt.z + OZ + oz * 0.45) - 0.3;
+        const pb = foot(p), qb = foot(q);
+        const quad = [[p, pb], [q, qb], [q, top], [p, pb], [q, top], [p, top]];
+        for (const [pt, y] of quad) {
+          pos.push(pt.x + OX, y, pt.z + OZ);
+          nrm.push(ox, 0, oz);
+          uv.push((pt.x + pt.z) * 0.5, y * 0.5);
+          const shade = 0.72 + 0.28 * Math.max(0, Math.min(1, (y - pb) / Math.max(0.1, top - pb))) + (hash(Math.round(pt.x * 2), Math.round(pt.z * 2)) - 0.5) * 0.1;
+          tmp.copy(stoneA).multiplyScalar(shade);
+          col.push(tmp.r, tmp.g, tmp.b);
+        }
+        if (hash(Math.round(mx * 2) + k, Math.round(mz * 2)) < 0.34) merlons.push(new THREE.Matrix4().makeTranslation(mx + OX + ox * 0.08, top + 0.14, mz + OZ + oz * 0.08));
+      };
+      for (let j = 0; j + 1 < nz; j++) for (let i = 0; i + 1 < nx; i++) {
+        const ax = x0 + i * WALL_STEP, az = z0 + j * WALL_STEP, bx = ax + WALL_STEP, bz = az + WALL_STEP;
+        const va = v[j * nx + i], vb = v[j * nx + i + 1], vc = v[(j + 1) * nx + i + 1], vd = v[(j + 1) * nx + i];
+        const pts = [];
+        if ((va > 0) !== (vb > 0)) pts.push(cut(ax, az, va, bx, az, vb));
+        if ((vb > 0) !== (vc > 0)) pts.push(cut(bx, az, vb, bx, bz, vc));
+        if ((vc > 0) !== (vd > 0)) pts.push(cut(bx, bz, vc, ax, bz, vd));
+        if ((vd > 0) !== (va > 0)) pts.push(cut(ax, bz, vd, ax, az, va));
+        if (pts.length === 2) segment(pts[0], pts[1]);
+        else if (pts.length === 4) { segment(pts[0], pts[1]); segment(pts[2], pts[3]); }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      const wall = new THREE.Mesh(geo, wallM);
+      wall.castShadow = wall.receiveShadow = true;
+      root.add(wall);
+
+      // the plaza: a banner in the floor's colour and two lamps
+      const colour = typeof Floors !== 'undefined' ? Floors.FLOORS[k].colour : '#c9963f';
+      const px = F.core.x + OX, pz = F.core.z + OZ, py = heightAt(px, pz);
+      root.add(mesh(box(0.1, 3.6, 0.1), mat('#3a3530'), px + 1.3, py, pz));
+      root.add(mesh(new THREE.PlaneGeometry(1.0, 0.7), mat(colour, { double: true, emissive: colour, ei: 0.15 }), px + 1.85, py + 3.15, pz));
+      for (const a of [Math.PI * 0.75, Math.PI * 1.25]) {
+        const lx = px + Math.sin(a) * 2.6, lz = pz - Math.cos(a) * 2.6;
+        root.add(mesh(box(0.08, 1.9, 0.08), mat('#3a3530'), lx, heightAt(lx, lz), lz));
+        root.add(mesh(new THREE.BoxGeometry(0.26, 0.3, 0.26), mat('#ffd38a', { emissive: '#ffb04a', ei: 1.2 }), lx, heightAt(lx, lz) + 2.0, lz));
+      }
+    }
+    if (merlons.length) {
+      const im = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, 0.28, 0.42), mat('#c9bea6'), merlons.length);
+      merlons.forEach((m, i) => im.setMatrixAt(i, m));
+      im.castShadow = im.receiveShadow = true;
+      root.add(im);
+    }
+    // stairs: STEPS treads on the ramp heightAt gives the walkers, with a low wall each side
+    const STEPS = 12, tread = mat('#cfc4ad'), side = mat('#b8aa90');
+    for (const st of lay.stairs) {
+      const ax = st.a.x + OX, az = st.a.z + OZ, bx = st.b.x + OX, bz = st.b.z + OZ;
+      const len = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / len, uz = (bz - az) / len, ry = Math.atan2(ux, uz);
+      const hiY = BaseLayout.FLOOR_H * st.k, loY = BaseLayout.FLOOR_H * (st.k - 1) - 0.3;
+      for (let i = 0; i < STEPS; i++) {
+        const t = (i + 0.5) / STEPS, cx = ax + ux * len * t, cz = az + uz * len * t;
+        const y = hiY - BaseLayout.FLOOR_H * t;
+        const g = new THREE.Group();
+        g.add(mesh(box(st.w, y - loY, len / STEPS + 0.02), tread));
+        for (const sx of [-1, 1]) g.add(mesh(box(0.26, y - loY + 0.4, len / STEPS + 0.02), side, sx * (st.w / 2 + 0.13), 0, 0));
+        g.position.set(cx, loY, cz);
+        g.rotation.y = ry;
+        root.add(g);
+      }
+    }
   }
 
   /** Smoke puffs over one chimney: SMOKE sprites cycling up, growing and fading. */
@@ -1539,22 +1705,24 @@ function create(cv, { fill = false } = {}) {
   }
 
   /** How far back the camera sits to fit the whole map, before any zoom. */
-  function fitDistance(aspect) {
+  function fitDistance(aspect, w, h) {
     const vf = FOV * Math.PI / 180, hf = 2 * Math.atan(Math.tan(vf / 2) * aspect);
-    const dW = world.w / (2 * Math.tan(hf / 2));
-    const dH = (world.h * Math.sin(PITCH) + 1.5 * Math.cos(PITCH)) / (2 * Math.tan(vf / 2));
+    const dW = w / (2 * Math.tan(hf / 2));
+    const dH = (h * Math.sin(PITCH) + 1.5 * Math.cos(PITCH)) / (2 * Math.tan(vf / 2));
     return Math.max(dW, dH) * 1.04;
   }
 
   function placeCamera(want, dt) {
     const aspect = sizeW / sizeH, vf = FOV * Math.PI / 180, hf = 2 * Math.atan(Math.tan(vf / 2) * aspect);
-    const fit = fitDistance(aspect), zoom = Math.max(1, want.zoom || 1), d = fit / zoom;
+    // the whole-view frames world.focus (the town's built-up box) when there is one, else the map
+    const box = world.focus || { x0: 0, z0: 0, x1: world.w, z1: world.h };
+    const fit = fitDistance(aspect, box.x1 - box.x0, box.z1 - box.z0), zoom = Math.max(1, want.zoom || 1), d = fit / zoom;
     const halfW = d * Math.tan(hf / 2), halfD = d * Math.tan(vf / 2) / Math.sin(PITCH);
-    // a zoomed view may look past the edge by `pad` tiles (the town's road out to the crystal)
+    // a zoomed view may look past the edge by `pad` tiles (the town's forest edge)
     const pad = world.fam === 'town' ? 6 : 0;
-    const axis = (span, half, centre) => (centre == null || span <= half * 2) ? span / 2
+    const axis = (span, half, centre, dflt) => centre == null ? dflt : span <= half * 2 ? span / 2
       : Math.max(half - pad, Math.min(span + pad - half, centre + 0.5));
-    const tx = axis(world.w, halfW, want.cx), tz = axis(world.h, halfD, want.cy);
+    const tx = axis(world.w, halfW, want.cx, (box.x0 + box.x1) / 2), tz = axis(world.h, halfD, want.cy, (box.z0 + box.z1) / 2);
     if (camState.tx == null) { camState.tx = tx; camState.tz = tz; camState.d = d; }
     const k = 1 - Math.exp(-dt / 70);
     camState.tx += (tx - camState.tx) * k;
@@ -1578,8 +1746,10 @@ function create(cv, { fill = false } = {}) {
     ray.setFromCamera(ndc, camera);
     plane.constant = 0;
     if (!ray.ray.intersectPlane(plane, hit)) return null;
-    plane.constant = -world.heightAt(hit.x, hit.z);
-    ray.ray.intersectPlane(plane, hit);
+    for (let i = 0; i < 3; i++) {                 // raised floors: walk the hit onto the ground's height
+      plane.constant = -world.heightAt(hit.x, hit.z);
+      ray.ray.intersectPlane(plane, hit);
+    }
     return { x: hit.x - 0.5, y: hit.z - 0.5 };
   }
 
@@ -1657,6 +1827,8 @@ function create(cv, { fill = false } = {}) {
     const map = sim.map;
     if (!world || world.map !== map) {
       build(map, 'town', (x, y) => (x >= 0 && y >= 0 && x < map.w && y < map.h) ? map.at(x, y) : T.FLOOR);
+      const b = map.layout.bounds;
+      world.focus = { x0: b.x0 + map.ox, x1: b.x1 + map.ox, z0: b.z0 + map.oz, z1: b.z1 + map.oz };
     }
     if (clockMs - lastOverlayAt > 66 || lastOverlayAt < 0) { drawThreads(knots || []); lastOverlayAt = clockMs; }
     const cam = placeCamera(want, dt);

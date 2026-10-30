@@ -196,7 +196,7 @@ const workMult = (c) => staminaMult(c) * moraleMult(c);
  * Where morale is being pulled toward, on how this character is being treated right now.
  * Rest and a roof raise it; being driven to empty, being hurt, or sleeping outside lower it.
  */
-function moraleTarget(c, { housed = true, working = false, restMult = 1, lodging = 0, fed = false, social = 0 } = {}) {
+function moraleTarget(c, { housed = true, working = false, restMult = 1, lodging = 0, fed = false, social = 0, station = 0, tavern = 0 } = {}) {
   let t = 55;
   if (housed) t += 12; else t -= fed ? 6 : 18;      // a meal is most of what a roof was worth
   if (fed) t += 6;
@@ -205,6 +205,8 @@ function moraleTarget(c, { housed = true, working = false, restMult = 1, lodging
                                                   // single thing in this function once a roster
                                                   // has been together long enough to have friends
   t += (restMult - 1) * 30;                       // and how well they sleep in it
+  t += station;                                   // housed below their standing (floors.js station)
+  t += tavern;                                    // a tavern they may drink in, while resting (floors.js)
   const f = staminaFrac(c);
   if (f >= RESTED) t += 12;
   if (f <= SPENT) t -= 22;
@@ -222,7 +224,7 @@ function moraleTarget(c, { housed = true, working = false, restMult = 1, lodging
  * One tick of living. `job` is the kind of work being done ('gather', 'process', 'town',
  * 'train') or null for rest. Returns what changed, so the town can say when somebody drops.
  */
-function tick(c, { job = null, housed = true, restMult = 1, mult = 1, lodging = 0, fed = false, social = 0 } = {}) {
+function tick(c, { job = null, housed = true, restMult = 1, mult = 1, lodging = 0, fed = false, social = 0, station = 0, tavern = 0 } = {}) {
   const cond = ensure(c);
   const d = S().effective(c).derived;
   const before = { stamina: cond.stamina, morale: cond.morale, spent: isSpent(c) };
@@ -237,7 +239,7 @@ function tick(c, { job = null, housed = true, restMult = 1, mult = 1, lodging = 
   }
 
   // morale moves slowly and by willpower: 10 CHA drifts about a point a tick, 25 CHA nearly two
-  const target = moraleTarget(c, { housed, working: !!job, restMult, lodging, fed, social });
+  const target = moraleTarget(c, { housed, working: !!job, restMult, lodging, fed, social, station, tavern });
   const rate = 0.35 + d.willpower * 0.02;
   cond.morale += clamp(target - cond.morale, -rate, rate);
   cond.morale = clamp(cond.morale, 0, MORALE_MAX);

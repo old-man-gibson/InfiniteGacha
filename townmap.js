@@ -7,7 +7,7 @@
 // square at the centre, the crystal north of it, workshops round the east, south and west,
 // homes round the crystal, and one road out south to the gate. Placements are stored in
 // state.base, so a new building never moves an old one. This file rasterises that layout onto a
-// mapgen.js grid (tile = layout position + map.offset) so the distance fields and the pathing in
+// mapgen.js grid (tile = layout position + (map.ox, map.oz)) so the distance fields and the pathing in
 // townlife.js work on it as they do on a mission map, and keeps the layout on map.layout for the
 // 3D view.
 //
@@ -20,12 +20,13 @@
 const MG = (typeof Mapgen !== 'undefined') ? Mapgen : require('./mapgen.js');
 const E = () => (typeof Econ !== 'undefined') ? Econ : require('./economy.js');
 const LO = () => (typeof Lodging !== 'undefined') ? Lodging : (typeof require !== 'undefined' ? require('./lodging.js') : null);
+const FL = () => (typeof Floors !== 'undefined') ? Floors : require('./floors.js');
 const T = MG.T;
 
 const BL = () => (typeof BaseLayout !== 'undefined') ? BaseLayout : require('./baselayout.js');
 const SQUARE_R = 5;
 const FOUNTAIN_R = 1.6;    // tiles round the square's centre nobody stands on
-const EDGE = 6;            // tiles of open ground past the layout's extent
+const EDGE = 6;            // tiles of open ground past the layout's built-up box
 
 // Footprints. A building's plot grows with its tier, which is the only way the town ever looks
 // bigger: an Abyssal Mine is a hole you can see from the road and a Quarry is a scrape.
@@ -39,6 +40,11 @@ const BED_SIZE = {
   cottages:  { w: 6, h: 4 },
   manor:     { w: 8, h: 6 },
   sanctum:   { w: 5, h: 5 },
+  // taverns
+  alehouse:  { w: 5, h: 4 },
+  inn:       { w: 6, h: 5 },
+  salon:     { w: 6, h: 5 },
+  crownhall: { w: 7, h: 6 },
 };
 
 /**
@@ -58,20 +64,25 @@ function workPlots(state) {
   return ORDER.filter(k => econ.BUILDINGS[k]).map(k => {
     const def = econ.BUILDINGS[k];
     const tier = state.buildings[k] || 0;
-    const top = workSize(def.tiers.length - 1);
-    return { key: k, kind: 'work', job: def.job || null, icon: def.icon, label: def.tiers[tier].name, tier, ...workSize(tier), rw: top.w, rh: top.h };
+    // the spot is chosen for a bigger footprint than the building has now, so it can grow in
+    // place: every tier on the ground, where there is room, and one tier ahead on a platform
+    const floor = def.floor || 0;
+    const room = workSize(floor ? Math.min(tier + 1, def.tiers.length - 1) : def.tiers.length - 1);
+    return { key: k, kind: 'work', floor, job: def.job || null, icon: def.icon, label: def.tiers[tier].name, tier, ...workSize(tier), rw: room.w, rh: room.h };
   });
 }
 
-/** Everywhere anybody sleeps, in the order it was built, then the altar. */
+/** Everywhere anybody sleeps or drinks, in the order it was built, then the altar. */
 function bedPlots(state) {
   const lo = LO(), econ = E();
   const out = (lo ? lo.ensure(state) : []).map(b => {
     const def = econ.LODGINGS[b.type] || econ.LODGINGS.tent;
-    return { key: 'bed:' + b.id, bedId: b.id, kind: 'bed', type: b.type, site: !!b.site, icon: def.icon, label: def.label, ...(BED_SIZE[b.type] || BED_SIZE.tent) };
+    // taverns live in the lodging yard too (economy.js LODGINGS tavern: true); their key keeps the
+    // 'bed:' prefix so a builder's goal ('bed:' + site id) finds either
+    return { key: 'bed:' + b.id, bedId: b.id, kind: def.tavern ? 'tavern' : 'bed', type: b.type, floor: b.floor || 0, site: !!b.site, icon: def.icon, label: def.label, ...(BED_SIZE[b.type] || BED_SIZE.tent) };
   });
   const altarTier = state.buildings.altar || 0;
-  out.push({ key: 'altar', kind: 'altar', icon: '⚱️', label: econ.BUILDINGS.altar.tiers[altarTier].name, w: 4, h: 4 });
+  out.push({ key: 'altar', kind: 'altar', floor: econ.BUILDINGS.altar.floor || 0, icon: '⚱️', label: econ.BUILDINGS.altar.tiers[altarTier].name, w: 4, h: 4 });
   return out;
 }
 
@@ -80,12 +91,14 @@ function bedPlots(state) {
  * fields, fieldview's palette and anything else that reads a map all work unchanged.
  */
 function build(state) {
-  const lay = BL().layout(state, [...workPlots(state), ...bedPlots(state)]);
-  const O = Math.ceil(lay.extent + EDGE);
-  const w = 2 * O + 1, h = 2 * O + 1;
+  const lay = BL().layout(state, [...workPlots(state), ...bedPlots(state)], { top: FL().top(state) });
+  // the grid covers the built-up box plus EDGE: tile (tx, ty) is layout (tx - OX, ty - OZ)
+  const b = lay.bounds;
+  const OX = Math.ceil(EDGE - b.x0), OZ = Math.ceil(EDGE - b.z0);
+  const w = Math.ceil(b.x1 + EDGE) + OX + 1, h = Math.ceil(b.z1 + EDGE) + OZ + 1;
   const g = MG.grid(w, h, T.FLOOR);
-  const tileOf = (x, z) => ({ x: Math.floor(x + O), y: Math.floor(z + O) });
-  const centreOf = (tx, ty) => ({ x: tx - O + 0.5, z: ty - O + 0.5 });
+  const tileOf = (x, z) => ({ x: Math.floor(x + OX), y: Math.floor(z + OZ) });
+  const centreOf = (tx, ty) => ({ x: tx - OX + 0.5, z: ty - OZ + 0.5 });
 
   // roads: every tile whose centre is within half a road's width of the polyline
   const stamp = (pts, half) => {
@@ -94,8 +107,8 @@ function build(state) {
       const len = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.ceil(len * 4));
       for (let k = 0; k <= n; k++) {
         const x = ax + (bx - ax) * k / n, z = az + (bz - az) * k / n;
-        for (let ty = Math.floor(z - half + O); ty <= Math.floor(z + half + O); ty++)
-          for (let tx = Math.floor(x - half + O); tx <= Math.floor(x + half + O); tx++) {
+        for (let ty = Math.floor(z - half + OZ); ty <= Math.floor(z + half + OZ); ty++)
+          for (let tx = Math.floor(x - half + OX); tx <= Math.floor(x + half + OX); tx++) {
             const c = centreOf(tx, ty);
             if (Math.hypot(c.x - x, c.z - z) <= half) g.set(tx, ty, T.ROAD);
           }
@@ -103,9 +116,10 @@ function build(state) {
     }
   };
   for (const r of lay.roads) stamp(r.pts, r.width / 2);
+
   const disc = (cx, cz, rad, code) => {
-    for (let ty = Math.floor(cz - rad + O); ty <= Math.ceil(cz + rad + O); ty++)
-      for (let tx = Math.floor(cx - rad + O); tx <= Math.ceil(cx + rad + O); tx++) {
+    for (let ty = Math.floor(cz - rad + OZ); ty <= Math.ceil(cz + rad + OZ); ty++)
+      for (let tx = Math.floor(cx - rad + OX); tx <= Math.ceil(cx + rad + OX); tx++) {
         const c = centreOf(tx, ty);
         if (Math.hypot(c.x - cx, c.z - cz) <= rad) g.set(tx, ty, code);
       }
@@ -114,13 +128,28 @@ function build(state) {
   disc(0, 0, FOUNTAIN_R, T.WALL);
   disc(lay.crystal.x, lay.crystal.z, 1.6, T.WALL);
 
+  // floors: the upper edge of every platform is a wall, except where a stair crosses it; the
+  // stairs themselves are road. Done after the roads, so a road never runs off a cliff.
+  if (lay.top > 0) {
+    const fl = new Int8Array(w * h);
+    for (let ty = 0; ty < h; ty++) for (let tx = 0; tx < w; tx++) { const c = centreOf(tx, ty); fl[ty * w + tx] = BL().floorAt(lay, c.x, c.z); }
+    const at = (tx, ty) => (tx < 0 || ty < 0 || tx >= w || ty >= h) ? 0 : fl[ty * w + tx];
+    for (let ty = 0; ty < h; ty++) for (let tx = 0; tx < w; tx++) {
+      const c = centreOf(tx, ty);
+      if (BL().onStair(lay, c.x, c.z, 0.2)) { g.set(tx, ty, T.ROAD); continue; }
+      const f = fl[ty * w + tx];
+      if (f > 0 && (at(tx + 1, ty) < f || at(tx - 1, ty) < f || at(tx, ty + 1) < f || at(tx, ty - 1) < f)) g.set(tx, ty, T.WALL);
+    }
+    for (const pz of lay.plazas) disc(pz.x, pz.z, pz.r, T.ROAD);
+  }
+
   const plots = {}, zones = {};
   for (const s of lay.structures) {
     const hw = s.w / 2, hd = s.h / 2, rad = s.r + 1;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     const inside = [];
-    for (let ty = Math.floor(s.z - rad + O); ty <= Math.ceil(s.z + rad + O); ty++)
-      for (let tx = Math.floor(s.x - rad + O); tx <= Math.ceil(s.x + rad + O); tx++) {
+    for (let ty = Math.floor(s.z - rad + OZ); ty <= Math.ceil(s.z + rad + OZ); ty++)
+      for (let tx = Math.floor(s.x - rad + OX); tx <= Math.ceil(s.x + rad + OX); tx++) {
         const c = centreOf(tx, ty), l = BL().toLocal(s, c.x, c.z);
         if (Math.abs(l.u) > hw || Math.abs(l.v) > hd) continue;
         x0 = Math.min(x0, tx); y0 = Math.min(y0, ty); x1 = Math.max(x1, tx); y1 = Math.max(y1, ty);
@@ -141,7 +170,7 @@ function build(state) {
       x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1,
       inside, at, door: dt,
     };
-    zones[s.key] = { x: s.x + O, y: s.z + O, r: s.r };
+    zones[s.key] = { x: s.x + OX, y: s.z + OZ, r: s.r };
   }
 
   // THE SQUARE: open ground round the fountain, where anybody with nowhere to be ends up
@@ -149,11 +178,11 @@ function build(state) {
   const sqIn = [];
   for (let ty = -SQUARE_R; ty <= SQUARE_R; ty++) for (let tx = -SQUARE_R; tx <= SQUARE_R; tx++) {
     const d = Math.hypot(tx + 0.5, ty + 0.5);
-    if (d <= SQUARE_R - 1 && d > FOUNTAIN_R + 0.6) sqIn.push({ x: tx + O, y: ty + O });
+    if (d <= SQUARE_R - 1 && d > FOUNTAIN_R + 0.6) sqIn.push({ x: tx + OX, y: ty + OZ });
   }
   plots.square = {
     key: 'square', kind: 'square', icon: '⛲', label: 'The square',
-    x: O - SQUARE_R, y: O - SQUARE_R, w: SQUARE_R * 2, h: SQUARE_R * 2,
+    x: OX - SQUARE_R, y: OZ - SQUARE_R, w: SQUARE_R * 2, h: SQUARE_R * 2,
     at: sqAt, door: sqAt, inside: sqIn,
   };
 
@@ -170,7 +199,7 @@ function build(state) {
 
   return {
     w, h, tiles: g, at: g.at, passable: g.passable, opaque: g.opaque, set: g.set,
-    archetype: 'settlement', plots, zones, layout: lay, offset: O,
+    archetype: 'settlement', plots, zones, layout: lay, ox: OX, oz: OZ,
     sig: signature(state),
   };
 }
