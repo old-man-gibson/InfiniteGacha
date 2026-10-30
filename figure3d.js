@@ -1988,11 +1988,16 @@ function buildParts(M, look, Bp) {
 function propGeometry(kind, q, k, opts = {}) {
   const prev = SURFS, metal = metalOf(q);
   SURFS = new Map([[metal.toLowerCase(), SURF.metal], ['#8a8c90', SURF.metal], ['#6a6c72', SURF.metal], ['#d6a83a', SURF.metal],
-    ['#7a5232', SURF.leather], ['#4e3420', SURF.leather], ['#3a2618', SURF.leather], ['#c9a06a', SURF.leather], ['#9a7244', SURF.leather], ['#8a2a24', SURF.leather], ['#b08a5a', SURF.leather],
+    ['#7a5232', SURF.leather], ['#4e3420', SURF.leather], ['#5a3a24', SURF.leather], ['#2a2a30', SURF.leather], ['#c0303a', SURF.gloss], ['#3a2618', SURF.leather], ['#c9a06a', SURF.leather], ['#9a7244', SURF.leather], ['#8a2a24', SURF.leather], ['#b08a5a', SURF.leather],
     ['#9fdcff', SURF.gloss], ['#62b6ff', SURF.gloss], ['#f4fbff', SURF.gloss], ['#6ad48a', SURF.gloss], ['#7ad4ff', SURF.gloss], ['#c8a060', SURF.gloss], ['#d8e6e8', SURF.gloss]]);
   try { return propGeometryRaw(kind, q, k, opts); } finally { SURFS = prev; }
 }
 
+// Grip space: the fist at the origin, the shaft along +y. In every stance grip x runs across the
+// body, so swings turn the grip in its y-z plane: blades and axe heads are drawn with their edges
+// along x and turned a quarter (EDGE_Z) so the edges face +-z and an axe cuts forward. Shields
+// hang off the forearm facing +x, centred on the origin.
+const EDGE_Z = new Set(['sword', 'dagger', 'axe', 'spear']);
 function propGeometryRaw(kind, q, k, opts = {}) {
   const T = E(), V = T.Vector3, parts = [];
   const add = (geo, c) => parts.push(paint(geo, c, 'root'));
@@ -2001,89 +2006,302 @@ function propGeometryRaw(kind, q, k, opts = {}) {
   const metal = metalOf(q), wood = '#7a5232', dwood = '#4e3420', grip = '#3a2618';
   const s = k;
   let glow = null;
+
+  // turned work along y from [[y, r, colour?], ...], bottom to top
+  const lathe = (pts, c, { seg = 8, cap0 = 0.5, cap1 = 0.5 } = {}) =>
+    parts.push(loft(pts.map(([y, r, cc]) => ({ y, rx: r, rz: r, c: cc || c })), seg, { capTop: cap1, capBottom: cap0 }));
+  // a wrapped grip: n raised turns with dark grooves between them
+  const wrap = (y0, y1, r, c, n = 5) => {
+    const pts = [], d = (y1 - y0) / n, dark = shade(c, 0.55);
+    for (let i = 0; i < n; i++) { const a = y0 + i * d; pts.push([a, r * 0.9, dark], [a + d * 0.22, r, c], [a + d * 0.78, r, c]); }
+    pts.push([y1, r * 0.9, dark]);
+    lathe(pts, c, { seg: 7, cap0: null, cap1: null });
+  };
+  // a blade from y0 along +y: half width w * prof(t), lozenge section, bright edges, and a darker
+  // fuller down the middle of the first `fuller` of its length
+  const blade = (y0, len, w, th, prof, body, edge, { fuller = 0, n = 10 } = {}) => {
+    const rings = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, p = prof(t);
+      rings.push({ y: y0 + len * t, rx: Math.max(w * p, 0.0005), rz: Math.max(th * Math.pow(p, 0.6) * (1 - 0.35 * t), 0.0003), sq: 1.3,
+        c: (a) => { const e = Math.abs(Math.sin(a)); return e > 0.9 ? edge : t < fuller && e < 0.1 ? shade(body, 0.7) : body; } });
+    }
+    parts.push(loft(rings, 8, { capTop: 0, capBottom: 0 }));
+  };
+  // a cross bar along x at height y, tips raised by `curl`, with knobs of radius `knob` on the ends
+  const guard = (y, span, r, c, curl = 0, knob = 0) => {
+    const path = [];
+    for (let i = 0; i <= 8; i++) { const u = i / 8 * 2 - 1; path.push(new V(u * span, y + curl * u * u, 0)); }
+    parts.push(sweep(path, (t) => { const m = 1 - 0.35 * Math.abs(2 * t - 1); return [r * 0.8 * m, r * m]; }, 6, c, 'root', { cap0: 0.6, cap1: 0.6 }));
+    if (knob) for (const u of [-1, 1]) add(blob(u * span, y + curl, 0, knob, knob, knob, { w: 8, h: 6 }), c);
+  };
+  // ball, wheel (a disc in the blade plane with a raised centre) or flask (a turned bottle)
+  const pommel = (y, r, c, shape, gem = null) => {
+    if (shape === 'wheel') {
+      add(blob(0, y, 0, r * 1.25, r * 1.25, r * 0.55, { w: 12, h: 6 }), c);
+      add(blob(0, y, 0, r * 0.5, r * 0.5, r * 0.75, { w: 8, h: 4 }), gem || mix(c, '#ffffff', 0.3));
+    } else if (shape === 'flask') lathe([[y - r * 1.3, r * 0.45], [y - r * 0.6, r], [y + r * 0.3, r * 0.72], [y + r * 0.8, r * 0.5]], c, { cap0: 0.8, cap1: 0.3 });
+    else add(blob(0, y, 0, r, r, r, { w: 8, h: 6 }), c);
+  };
+  // both faces of an open surface
+  const twoSided = (g, c) => { const b = g.clone(); b.setIndex(Array.from(g.index.array).reverse()); add(g, c); add(b, c); };
+
+  // a shield body facing +x: front and back as polar meshes over `outline` ([z, y] points round
+  // the origin), each point pushed back by bend(z, y), the two joined at the edge; a tube rim
+  // runs along the outline
+  const shield = (outline, th, bend, face, back, rim, rr) => {
+    const F = [0, 0.3, 0.55, 0.75, 0.9, 1], R = F.length, N = outline.length, pos = [], idx = [];
+    for (const side of [1, -1]) for (const f of F) for (const [z, y] of outline) pos.push(side * th / 2 - bend(z * f, y * f), y * f, z * f);
+    const at = (side, r, i) => (side * R + r) * N + (i % N);
+    for (let r = 0; r < R - 1; r++) for (let i = 0; i < N; i++) {
+      idx.push(at(0, r, i), at(0, r, i + 1), at(0, r + 1, i), at(0, r, i + 1), at(0, r + 1, i + 1), at(0, r + 1, i));
+      idx.push(at(1, r, i), at(1, r + 1, i), at(1, r, i + 1), at(1, r, i + 1), at(1, r + 1, i), at(1, r + 1, i + 1));
+    }
+    for (let i = 0; i < N; i++) idx.push(at(0, R - 1, i), at(0, R - 1, i + 1), at(1, R - 1, i), at(0, R - 1, i + 1), at(1, R - 1, i + 1), at(1, R - 1, i));
+    // the outline's direction decides the winding: make the front face +x
+    const P = (j) => new V(pos[j * 3], pos[j * 3 + 1], pos[j * 3 + 2]), a = P(at(0, 2, 0));
+    if (new V().crossVectors(P(at(0, 2, 1)).sub(a), P(at(0, 3, 0)).sub(a)).x < 0) for (let j = 0; j < idx.length; j += 3) { const t = idx[j + 1]; idx[j + 1] = idx[j + 2]; idx[j + 2] = t; }
+    const g = new T.BufferGeometry();
+    g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    parts.push(paint(g, (x, y, z) => x + bend(z, y) > 0 ? face : back, 'root'));
+    const loop = outline.map(([z, y]) => new V(-bend(z, y), y, z));
+    loop.push(loop[0].clone());
+    parts.push(sweep(loop, () => rr, 6, rim, 'root', { cap0: null, cap1: null }));
+  };
+  // a raised strip on a shield face along [z, y] points
+  const onFace = (pts, w, th, bend, c) => {
+    const path = [], at = (z, y) => new V(th / 2 + 0.0012 * s - bend(z, y), y, z);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [z0, y0] = pts[i], [z1, y1] = pts[i + 1], n = Math.max(1, Math.ceil(Math.hypot(z1 - z0, y1 - y0) / (0.02 * s)));
+      for (let j = 0; j < n; j++) path.push(at(lerp(z0, z1, j / n), lerp(y0, y1, j / n)));
+    }
+    path.push(at(...pts[pts.length - 1]));
+    parts.push(sweep(path, () => [w / 2, 0.0022 * s], 6, c, 'root', { up: () => new V(1, 0, 0), cap0: 0, cap1: 0 }));
+  };
+  const stud = (z, y, r, th, bend, c) => add(blob(th / 2 - bend(z, y), y, z, r * 0.7, r, r, { w: 8, h: 6 }), c);
+
   switch (kind) {
     case 'sword': {
-      const L = 0.36 * s, glowing = q >= 5;
-      cyl(0.011 * s, 0.011 * s, -0.05 * s, 0.05 * s, grip);
-      add(blob(0, -0.058 * s, 0, 0.016 * s, 0.016 * s, 0.016 * s, { w: 6, h: 4 }), metal);
-      box(0.1 * s, 0.014 * s, 0.018 * s, 0, 0.056 * s, 0, metal);
-      const bc = glowing ? '#9fdcff' : mix(metal, '#ffffff', 0.35);
-      const b = new T.CylinderGeometry(0.001, 0.016 * s, L, 4); b.scale(1, 1, 0.3); b.translate(0, 0.063 * s + L / 2, 0); add(b, bc);
+      // arming sword in the quality's metal; q5 is the glowing blade on a gold hilt
+      const L = 0.4 * s, glowing = q >= 5, fit = glowing ? '#d6a83a' : metal;
+      const body = glowing ? '#9fdcff' : mix(metal, '#dfe6ee', 0.35), edge = glowing ? '#f4fbff' : mix(metal, '#ffffff', 0.7);
+      wrap(-0.052 * s, 0.05 * s, 0.0115 * s, q >= 3 ? dwood : grip, 5);
+      pommel(-0.066 * s, 0.017 * s, fit, q === 4 ? 'flask' : q >= 2 ? 'wheel' : 'ball', glowing ? '#62b6ff' : null);
+      guard(0.058 * s, (q >= 3 ? 0.062 : 0.052) * s, 0.0085 * s, fit, q >= 3 ? 0.012 * s : 0, q >= 1 ? 0.009 * s : 0);
+      add(blob(0, 0.058 * s, 0, 0.014 * s, 0.012 * s, 0.01 * s, { w: 8, h: 6 }), fit);
+      blade(0.064 * s, L, 0.019 * s, 0.0055 * s, (t) => t < 0.78 ? 1 - 0.18 * t : (1 - t) / 0.22 * 0.86, body, edge, { fuller: 0.6 });
       if (glowing) glow = { y: 0.06 * s + L * 0.5, colour: '#7fc8ff', size: L * 1.6 };
-      break;
-    }
-    case 'axe': {
-      const war = q >= 4, L = (war ? 0.5 : 0.36) * s;
-      cyl(0.012 * s, 0.012 * s, -0.06 * s, L, wood);
-      for (const side of war ? [1, -1] : [1]) {
-        const g = new T.CylinderGeometry(0.075 * s, 0.075 * s, 0.012 * s, 10, 1, false, 0, Math.PI); g.rotateX(Math.PI / 2); g.rotateZ(side > 0 ? 0 : Math.PI);
-        g.scale(war ? 1 : 0.8, war ? 1.1 : 0.8, 1); g.rotateY(Math.PI / 2); g.translate(0, L - 0.05 * s, 0); add(g, mix(metal, '#ffffff', 0.2));
-      }
-      if (!war) box(0.02 * s, 0.04 * s, 0.03 * s, 0, L - 0.05 * s, -0.02 * s, metal);
-      break;
-    }
-    case 'spear': {
-      const shaft = ['#c9a06a', '#c9a06a', '#9a7244', '#9a7244', '#4e3420', '#8a2a24'][clamp(q, 0, 5)];
-      cyl(0.01 * s, 0.01 * s, -0.42 * s, 0.62 * s, shaft);
-      const g = new T.CylinderGeometry(0.001, 0.024 * s, 0.13 * s, 4); g.scale(1, 1, 0.35); g.translate(0, 0.62 * s + 0.065 * s, 0); add(g, mix(metal, '#ffffff', 0.3));
-      box(0.03 * s, 0.012 * s, 0.03 * s, 0, 0.62 * s, 0, metal);
       break;
     }
     case 'dagger': {
       if (q >= 4) {
-        cyl(0.009 * s, 0.009 * s, -0.045 * s, 0.04 * s, grip);
-        const cup = new T.SphereGeometry(0.03 * s, 8, 6, 0, TAU, 0, Math.PI / 2); cup.translate(0, 0.04 * s, 0); add(cup, metal);
-        const b = new T.CylinderGeometry(0.0015, 0.006 * s, 0.42 * s, 4); b.translate(0, 0.045 * s + 0.21 * s, 0); add(b, mix(metal, '#ffffff', 0.4));
+        // rapier: cup, quillons and a knuckle bow round the fist, long narrow blade
+        wrap(-0.05 * s, 0.045 * s, 0.009 * s, '#2a2a30', 7);
+        pommel(-0.064 * s, 0.015 * s, metal, 'flask');
+        if (q >= 5) add(blob(0, -0.062 * s, 0, 0.009 * s, 0.009 * s, 0.016 * s, { w: 8, h: 6 }), '#c0303a');
+        guard(0.048 * s, 0.062 * s, 0.006 * s, metal, 0, 0.007 * s);
+        const cup = new T.SphereGeometry(0.032 * s, 12, 5, 0, TAU, 0, Math.PI * 0.42);
+        cup.scale(1, 0.75, 1); cup.translate(0, 0.03 * s, 0);
+        twoSided(cup, metal);
+        const bow = [];
+        for (let i = 0; i <= 10; i++) { const a = i / 10 * Math.PI; bow.push(new V(Math.sin(a) * 0.045 * s, lerp(0.045, -0.058, (1 - Math.cos(a)) / 2) * s, 0)); }
+        parts.push(sweep(bow, () => 0.0045 * s, 5, metal, 'root', { cap0: 0.5, cap1: 0.5 }));
+        blade(0.05 * s, 0.44 * s, 0.0085 * s, 0.0045 * s, (t) => t < 0.9 ? 1 - 0.45 * t : (1 - t) / 0.1 * 0.595, mix(metal, '#dfe6ee', 0.55), mix(metal, '#ffffff', 0.75));
       } else {
-        cyl(0.01 * s, 0.01 * s, -0.04 * s, 0.035 * s, grip);
-        box(0.06 * s, 0.01 * s, 0.014 * s, 0, 0.04 * s, 0, metal);
-        const b = new T.CylinderGeometry(0.001, 0.014 * s, 0.15 * s, 4); b.scale(1, 1, 0.3); b.translate(0, 0.045 * s + 0.075 * s, 0); add(b, mix(metal, '#ffffff', 0.35));
+        // q0 a straight knife, q1 a guard, q2 a curled guard and wheel, q3 a rondel (disc guard and pommel)
+        wrap(-0.04 * s, 0.034 * s, 0.0095 * s, q >= 2 ? dwood : wood, 4);
+        if (q === 3) {
+          add(blob(0, 0.04 * s, 0, 0.022 * s, 0.005 * s, 0.022 * s, { w: 12, h: 4 }), metal);
+          add(blob(0, -0.046 * s, 0, 0.02 * s, 0.006 * s, 0.02 * s, { w: 12, h: 4 }), metal);
+        } else {
+          guard(0.04 * s, (0.026 + 0.004 * q) * s, 0.0065 * s, metal, q === 2 ? -0.006 * s : 0, q >= 1 ? 0.0065 * s : 0);
+          pommel(-0.05 * s, 0.012 * s, metal, q === 2 ? 'wheel' : 'ball');
+        }
+        blade(0.044 * s, (0.15 + 0.012 * q) * s, (q === 0 ? 0.011 : 0.0135) * s, 0.0045 * s, q === 0 ? (t) => t < 0.6 ? 1 : (1 - t) / 0.4 : (t) => 1 - Math.pow(t, 1.6),
+          mix(metal, '#dfe6ee', 0.35), mix(metal, '#ffffff', 0.7), { fuller: q >= 2 ? 0.5 : 0 });
+      }
+      break;
+    }
+    case 'axe': {
+      // q0 a hatchet, q1..3 bearded axes growing with quality, q4+ a two-handed double-bit war axe
+      const war = q >= 4, L = (war ? 0.52 : 0.36 + 0.01 * q) * s, hy = L - 0.05 * s, sc = (war ? 0.85 : 0.9 + 0.07 * q) * s;
+      lathe([[-0.07 * s, 0.011 * s], [0, 0.0115 * s], [hy - 0.04 * s, 0.012 * s], [hy, 0.0135 * s], [L + 0.012 * s, 0.0125 * s]], wood, { seg: 7, cap0: 0.4, cap1: 0.4 });
+      add(blob(0, -0.074 * s, 0, 0.015 * s, 0.012 * s, 0.015 * s, { w: 8, h: 6 }), q >= 2 ? shade(metal, 0.85) : dwood);
+      wrap(-0.055 * s, 0.05 * s, 0.0135 * s, grip, 4);
+      if (war) wrap(0.16 * s, 0.24 * s, 0.0135 * s, grip, 3);
+      const sh = new T.Shape(), P = (x, y) => [x * sc, y * sc];
+      if (war) {
+        sh.moveTo(...P(0.03, 0.016)); sh.lineTo(...P(0.095, 0.07)); sh.quadraticCurveTo(...P(0.135, 0), ...P(0.095, -0.07));
+        sh.lineTo(...P(0.03, -0.016)); sh.lineTo(...P(-0.03, -0.016)); sh.lineTo(...P(-0.095, -0.07));
+        sh.quadraticCurveTo(...P(-0.135, 0), ...P(-0.095, 0.07)); sh.lineTo(...P(-0.03, 0.016));
+      } else if (q === 0) {
+        sh.moveTo(...P(-0.02, 0.016)); sh.lineTo(...P(0.07, 0.026)); sh.quadraticCurveTo(...P(0.082, -0.005), ...P(0.07, -0.034)); sh.lineTo(...P(-0.02, -0.016));
+      } else {
+        sh.moveTo(...P(-0.022, 0.017)); sh.lineTo(...P(0.032, 0.014)); sh.lineTo(...P(0.074, 0.034));
+        sh.quadraticCurveTo(...P(0.094, -0.012), ...P(0.068, -0.062)); sh.quadraticCurveTo(...P(0.042, -0.03), ...P(0.03, -0.016)); sh.lineTo(...P(-0.022, -0.017));
+      }
+      sh.closePath();
+      // a thin slab with a wide bevel: thick through the cheeks, ground down to a bright edge
+      const depth = 0.002 * s, bt = 0.0042 * s, bs = 0.006 * s, edgeFrom = (war ? 0.075 : 0.05) * sc;
+      const body = mix(metal, '#cfd6de', 0.12), edge = mix(metal, '#ffffff', 0.7);
+      const g = new T.ExtrudeGeometry(sh, { depth, bevelEnabled: true, bevelThickness: bt, bevelSize: bs, bevelSegments: 2, curveSegments: 8 });
+      paint(g, (x, y, z) => z < -bt * 0.9 || z > depth + bt * 0.9 ? body : Math.abs(x) > edgeFrom ? edge : shade(body, 0.8), 'root');
+      g.translate(0, hy, -depth / 2);
+      parts.push(g);
+      lathe([[hy - 0.026 * sc, 0.0165 * s], [hy + 0.026 * sc, 0.0165 * s]], shade(metal, 0.85), { cap0: 0, cap1: 0 });
+      if (war || q === 3) for (const z of [-1, 1]) box(0.007 * s, (war ? 0.13 : 0.07) * s, 0.003 * s, 0, hy - (war ? 0.09 : 0.06) * s, z * 0.0128 * s, shade(metal, 0.8));
+      if (q >= 5) blade(L + 0.008 * s, 0.07 * s, 0.012 * s, 0.006 * s, (t) => 1 - t, body, edge);
+      break;
+    }
+    case 'spear': {
+      const shaft = ['#c9a06a', '#c9a06a', '#9a7244', '#9a7244', '#4e3420', '#8a2a24'][clamp(q, 0, 5)], top = 0.6 * s;
+      lathe([[-0.4 * s, 0.0085 * s], [0, 0.0095 * s], [top, 0.009 * s]], shaft, { seg: 7, cap0: null, cap1: null });
+      lathe([[-0.445 * s, 0.001 * s], [-0.415 * s, 0.0095 * s], [-0.395 * s, 0.0095 * s]], shade(metal, 0.8), { seg: 7, cap0: 0, cap1: 0 });
+      if (q >= 2) wrap(-0.05 * s, 0.05 * s, 0.0108 * s, grip, 4);
+      if (q === 4) for (const y of [0.2, 0.35, 0.48]) lathe([[y * s, 0.0105 * s], [(y + 0.012) * s, 0.0105 * s]], metal, { seg: 7, cap0: 0, cap1: 0 });
+      // socket with a collar, then a leaf-shaped head; lugs under it from q3, a tassel at q5
+      lathe([[top - 0.02 * s, 0.0108 * s], [top + 0.035 * s, 0.0075 * s]], shade(metal, 0.85), { seg: 7, cap0: 0, cap1: 0 });
+      lathe([[top - 0.024 * s, 0.0128 * s], [top - 0.013 * s, 0.0128 * s]], metal, { seg: 7, cap0: 0, cap1: 0 });
+      blade(top + 0.03 * s, 0.15 * s, (q >= 3 ? 0.026 : 0.022) * s, 0.006 * s, (t) => t < 0.3 ? lerp(0.35, 1, smooth(t / 0.3)) : Math.pow((1 - t) / 0.7, 0.85),
+        mix(metal, '#cfd6de', 0.3), mix(metal, '#ffffff', 0.7));
+      if (q >= 3) guard(top + 0.004 * s, 0.026 * s, 0.0045 * s, metal, 0.006 * s, 0);
+      if (q >= 5) {
+        lathe([[top - 0.032 * s, 0.0115 * s], [top - 0.024 * s, 0.0115 * s]], '#d6a83a', { seg: 7, cap0: 0, cap1: 0 });
+        for (let i = 0; i < 7; i++) {
+          const a = i / 7 * TAU, c = Math.cos(a), d = Math.sin(a), path = [];
+          for (let j = 0; j <= 3; j++) { const t = j / 3, r = (0.009 + 0.012 * t) * s; path.push(new V(c * r, top - (0.03 + 0.065 * t) * s, d * r)); }
+          parts.push(sweep(path, (t) => 0.0042 * s * (1 - 0.4 * t), 4, '#b0302c', 'root', { cap0: 0.3, cap1: 0.5 }));
+        }
       }
       break;
     }
     case 'staff': {
       const top = 0.72 * s;
-      if (q <= 1) { cyl(0.012 * s, 0.014 * s, -0.32 * s, top, wood); add(blob(0, top, 0, 0.022 * s, 0.022 * s, 0.022 * s, { w: 6, h: 4 }), dwood); }
-      else {
-        const path = [];
-        for (let i = 0; i <= 8; i++) { const t = i / 8; path.push(new V(Math.sin(t * 7) * 0.012 * s, lerp(-0.32, 0.7, t) * s, Math.cos(t * 5) * 0.01 * s)); }
-        if (q <= 3) { path.push(new V(0.03 * s, 0.76 * s, 0)); path.push(new V(0.05 * s, 0.72 * s, 0)); }
-        parts.push(sweep(path, (t) => 0.015 * s * (1 - t * 0.3), 6, dwood, 'root', { cap0: 0.5, cap1: 0.5 }));
-        if (q >= 4) {
-          const g = new T.OctahedronGeometry(0.04 * s, 0); g.scale(1, 1.6, 1); g.translate(0, top + 0.06 * s, 0);
-          add(g, q >= 5 ? '#f4fbff' : '#62b6ff');
-          glow = { y: top + 0.06 * s, colour: q >= 5 ? '#e8f6ff' : '#5fb0ff', size: 0.26 * s };
+      if (q <= 1) {
+        // a straight staff with an iron-shod foot; q1 gets a capped head and a cloth band
+        lathe([[-0.32 * s, 0.0115 * s], [0.2 * s, 0.013 * s], [top, 0.0135 * s]], wood, { seg: 7, cap0: null, cap1: 0.3 });
+        lathe([[-0.345 * s, 0.008 * s], [-0.325 * s, 0.0125 * s], [-0.3 * s, 0.0125 * s]], shade(metal, 0.8), { seg: 7, cap0: 0.4, cap1: 0 });
+        wrap(-0.05 * s, 0.06 * s, 0.0148 * s, grip, 4);
+        if (q === 0) add(blob(0, top + 0.012 * s, 0, 0.022 * s, 0.026 * s, 0.022 * s, { w: 8, h: 6 }), dwood);
+        else {
+          lathe([[top - 0.03 * s, 0.0152 * s], [top + 0.006 * s, 0.017 * s], [top + 0.03 * s, 0.006 * s]], metal, { cap0: 0, cap1: 0.6 });
+          wrap(top - 0.12 * s, top - 0.06 * s, 0.0148 * s, '#8a2a24', 3);
         }
+      } else if (q <= 3) {
+        // gnarled: a knotted, wandering shaft that curls over at the top; q3 hangs two charms off the curl
+        const path = [];
+        for (let i = 0; i <= 14; i++) { const t = i / 14; path.push(new V(Math.sin(t * 7) * 0.012 * s, lerp(-0.32, 0.7, t) * s, Math.cos(t * 5) * 0.01 * s)); }
+        for (const [x, y] of [[0.02, 0.75], [0.045, 0.77], [0.065, 0.75], [0.07, 0.72], [0.06, 0.7]]) path.push(new V(x * s, y * s, 0));
+        const n = path.length;
+        parts.push(sweep(path, (t) => 0.015 * s * (1 - t * 0.45) * (1 + 0.22 * Math.pow(Math.max(0, Math.sin(t * n * 1.7)), 6)), 7, dwood, 'root', { cap0: 0.5, cap1: 0.6 }));
+        if (q === 3) for (const [x, c] of [[0.05, '#e8e0cc'], [0.068, '#3aa58a']]) {
+          parts.push(sweep([new V(x * s, 0.76 * s, 0), new V(x * s, 0.71 * s, 0.004 * s)], () => 0.0015 * s, 3, '#c9a06a', 'root', { cap0: null, cap1: null }));
+          add(blob(x * s, 0.7 * s, 0.004 * s, 0.009 * s, 0.012 * s, 0.009 * s, { w: 6, h: 5 }), c);
+        }
+      } else {
+        // crystal staff: a turned shaft with metal rings, a collar and three prongs round the crystal;
+        // q5 is a white crystal on gold with a ring round it
+        const fit = q >= 5 ? '#d6a83a' : metal, cy = top + 0.075 * s;
+        lathe([[-0.32 * s, 0.011 * s], [0.3 * s, 0.0125 * s], [top - 0.03 * s, 0.013 * s]], dwood, { seg: 7, cap0: null, cap1: null });
+        lathe([[-0.345 * s, 0.008 * s], [-0.325 * s, 0.0122 * s], [-0.3 * s, 0.0122 * s]], fit, { seg: 7, cap0: 0.4, cap1: 0 });
+        for (const y of [0.25, 0.45]) lathe([[y * s, 0.0145 * s], [(y + 0.015) * s, 0.0145 * s]], fit, { seg: 7, cap0: 0, cap1: 0 });
+        wrap(-0.05 * s, 0.06 * s, 0.0145 * s, grip, 4);
+        lathe([[top - 0.04 * s, 0.0135 * s], [top, 0.019 * s], [top + 0.012 * s, 0.012 * s]], fit, { cap0: 0, cap1: 0 });
+        for (let i = 0; i < 3; i++) {
+          const a = i / 3 * TAU + 0.3, path = [];
+          for (let j = 0; j <= 6; j++) { const t = j / 6, r = (0.01 + 0.03 * Math.sin(t * Math.PI * 0.85)) * s; path.push(new V(Math.cos(a) * r, top + (0.005 + t * 0.11) * s, Math.sin(a) * r)); }
+          parts.push(sweep(path, (t) => 0.0045 * s * (1 - 0.6 * t), 5, fit, 'root', { cap0: 0.5, cap1: 0.8 }));
+        }
+        const g = new T.OctahedronGeometry(0.036 * s, 0); g.scale(1, 1.7, 1); g.rotateY(0.4); g.translate(0, cy, 0);
+        add(g, q >= 5 ? '#f4fbff' : '#62b6ff');
+        if (q >= 5) { const halo = new T.TorusGeometry(0.062 * s, 0.0035 * s, 6, 28); halo.rotateX(Math.PI / 2 - 0.3); halo.translate(0, cy, 0); add(halo, fit); }
+        glow = { y: cy, colour: q >= 5 ? '#e8f6ff' : '#5fb0ff', size: (q >= 5 ? 0.34 : 0.26) * s };
       }
       break;
     }
     case 'bow': {
+      // limbs in the y-z plane, riser toward +z; q2+ recurve with horn tips, q4+ a lacquered
+      // composite with gold tips and fittings
+      const rec = q >= 4 ? 0.5 : q >= 2 ? 0.34 : 0, limb = q >= 4 ? '#4e3420' : q >= 2 ? '#9a7244' : wood;
+      const tipC = q >= 4 ? '#d6a83a' : q >= 2 ? '#e8e0cc' : limb;
       const path = [];
-      for (let i = 0; i <= 10; i++) { const t = i / 10 * 2 - 1; path.push(new V(0, t * 0.4 * s, (0.06 - 0.06 * t * t) * s + (Math.abs(t) > 0.8 ? (Math.abs(t) - 0.8) * -0.15 * s : 0))); }
-      parts.push(sweep(path, (t) => 0.011 * s * (1 - Math.abs(t * 2 - 1) * 0.5), 5, wood, 'root', { cap0: 0.5, cap1: 0.5 }));
-      cyl(0.0025 * s, 0.0025 * s, -0.4 * s, 0.4 * s, '#e8e0cc', 3, 0, 0);
-      cyl(0.014 * s, 0.014 * s, -0.04 * s, 0.04 * s, grip, 6, 0, 0.06 * s);
+      for (let i = 0; i <= 20; i++) { const t = i / 20 * 2 - 1, a = Math.abs(t); path.push(new V(0, t * 0.4 * s, (0.062 - 0.062 * t * t + rec * Math.pow(Math.max(0, a - 0.7), 2)) * s)); }
+      parts.push(sweep(path, (t) => { const a = Math.abs(2 * t - 1); return [lerp(0.0085, 0.004, a) * s, lerp(0.013, 0.0055, a) * s]; }, 6,
+        (t) => Math.abs(2 * t - 1) > 0.88 ? tipC : limb, 'root', { cap0: 0.6, cap1: 0.6 }));
+      parts.push(sweep(path.slice(8, 13), () => [0.0105 * s, 0.0155 * s], 6, grip, 'root', { cap0: 0.3, cap1: 0.3 }));
+      if (q >= 4) for (const i of [7, 13]) add(blob(0, path[i].y, path[i].z, 0.0155 * s, 0.006 * s, 0.011 * s, { w: 8, h: 4 }), '#d6a83a');
+      parts.push(sweep([path[0].clone(), path[20].clone()], () => 0.0022 * s, 4, '#e8e0cc', 'root', { cap0: null, cap1: null }));
       break;
     }
-    case 'arrow': { cyl(0.004 * s, 0.004 * s, -0.25 * s, 0.25 * s, '#c9a06a', 4); const g = new T.ConeGeometry(0.01 * s, 0.04 * s, 4); g.translate(0, 0.27 * s, 0); add(g, '#8a8c90'); box(0.024 * s, 0.05 * s, 0.002, 0, -0.22 * s, 0, '#e8e2d6'); break; }
+    case 'arrow': {
+      lathe([[-0.25 * s, 0.0042 * s], [0.25 * s, 0.0042 * s]], '#c9a06a', { seg: 5, cap0: 0, cap1: 0 });
+      lathe([[-0.262 * s, 0.003 * s], [-0.25 * s, 0.0055 * s]], grip, { seg: 5, cap0: 0, cap1: 0 });
+      blade(0.248 * s, 0.045 * s, 0.011 * s, 0.003 * s, (t) => t < 0.25 ? lerp(0.5, 1, t / 0.25) : (1 - t) / 0.75, '#8a8c90', mix('#8a8c90', '#ffffff', 0.45));
+      for (let i = 0; i < 3; i++) {
+        const a = i / 3 * TAU, d = new V(Math.cos(a), 0, Math.sin(a)), p = (r, y) => d.clone().multiplyScalar(r * s).setY(y * s);
+        add(sheet([p(0.004, -0.235), p(0.004, -0.15), p(0.014, -0.16), p(0.018, -0.215), p(0.012, -0.24)], 0.0012 * s), i ? '#e8e2d6' : '#b0302c');
+      }
+      break;
+    }
     case 'buckler': {
-      const g = new T.SphereGeometry(0.12 * s, 14, 6, 0, TAU, 0, Math.PI * 0.32); g.rotateZ(-Math.PI / 2); add(g, '#7a5232');
-      const b = new T.SphereGeometry(0.035 * s, 8, 6, 0, TAU, 0, Math.PI / 2); b.rotateZ(-Math.PI / 2); b.translate(0.045 * s, 0, 0); add(b, metal);
+      // round and dished; the face goes wood, leather, painted with quality, studs from q1, a ring from q3
+      const R = 0.12 * s, th = 0.011 * s, bend = (z, y) => (z * z + y * y) / (0.6 * s);
+      const face = ['#7a5232', '#7a5232', '#5a3a24', '#8a2a24', '#2e4a7a', '#e8e2d2'][clamp(q, 0, 5)];
+      const outline = [];
+      for (let i = 0; i < 32; i++) { const a = i / 32 * TAU; outline.push([Math.cos(a) * R, Math.sin(a) * R]); }
+      shield(outline, th, bend, face, dwood, shade(metal, 0.9), 0.008 * s);
+      add(blob(th / 2 - 0.002 * s, 0, 0, 0.026 * s, 0.036 * s, 0.036 * s, { w: 12, h: 8 }), metal);
+      if (q >= 1) for (let i = 0; i < 10; i++) { const a = i / 10 * TAU; stud(Math.cos(a) * R * 0.82, Math.sin(a) * R * 0.82, 0.006 * s, th, bend, metal); }
+      if (q >= 3) {
+        const ring = [];
+        for (let i = 0; i <= 28; i++) { const a = i / 28 * TAU; ring.push([Math.cos(a) * R * 0.56, Math.sin(a) * R * 0.56]); }
+        onFace(ring, 0.009 * s, th, bend, metal);
+      }
       break;
     }
     case 'kite': {
-      const face = q >= 3 ? '#3a5ea8' : '#8a8e96';
-      const pts = [new V(0.012, 0.13 * s, 0), new V(0.012, 0.1 * s, 0.11 * s), new V(0.012, -0.05 * s, 0.09 * s), new V(0.012, -0.22 * s, 0), new V(0.012, -0.05 * s, -0.09 * s), new V(0.012, 0.1 * s, -0.11 * s)];
-      const g = sheet([new V(0.016, 0, 0), ...pts, pts[0]], 0.014); add(g, face);
-      add(blob(0.022, 0.0, 0, 0.012, 0.03 * s, 0.03 * s, { w: 6, h: 4 }), metal);
+      // rounded top tapering to a point, bent round the arm; grey below q3, blue with a cross from q3
+      const blue = q >= 3, face = blue ? '#3a5ea8' : '#8a8e96', th = 0.012 * s;
+      const bend = (z, y) => z * z / (0.4 * s) + y * y / (1.6 * s);
+      const outline = [], W = 0.105 * s, top = 0.06 * s, tip = -0.23 * s;
+      for (let i = 0; i <= 14; i++) { const a = i / 14 * Math.PI; outline.push([Math.cos(a) * W, top + Math.sin(a) * W]); }
+      for (let i = 1; i < 12; i++) { const t = i / 12, u = 1 - t; outline.push([-(u * u * W + 2 * u * t * W * 0.92), u * u * top + 2 * u * t * (-0.1 * s) + t * t * tip]); }
+      outline.push([0, tip]);
+      for (let i = 11; i >= 1; i--) { const t = i / 12, u = 1 - t; outline.push([u * u * W + 2 * u * t * W * 0.92, u * u * top + 2 * u * t * (-0.1 * s) + t * t * tip]); }
+      shield(outline, th, bend, face, dwood, q >= 4 ? '#d6a83a' : shade(metal, 0.9), 0.0065 * s);
+      const cy = 0.05 * s;
+      if (blue) {
+        const c = q >= 4 ? '#d6a83a' : '#e8e2d2';
+        onFace([[0, 0.152 * s], [0, -0.19 * s]], 0.02 * s, th, bend, c);
+        onFace([[-0.088 * s, cy], [0.088 * s, cy]], 0.02 * s, th, bend, c);
+      }
+      if (q >= 1) add(blob(th / 2 - bend(0, cy), cy, 0, 0.02 * s, 0.026 * s, 0.026 * s, { w: 10, h: 8 }), q >= 4 ? '#d6a83a' : metal);
+      if (q === 2 || q >= 5) for (const [z, y] of [[0.07, 0.11], [-0.07, 0.11], [0.06, -0.04], [-0.06, -0.04], [0, 0.15], [0, -0.17]]) stud(z * s, y * s, 0.006 * s, th, bend, metal);
       break;
     }
     case 'tower': {
-      const g = new T.CylinderGeometry(0.28 * s, 0.28 * s, 0.46 * s, 12, 1, true, -0.45, 0.9);
-      g.rotateY(Math.PI / 2); g.translate(-0.26 * s, 0, 0); add(g, '#9a2a24');
-      const g2 = g.clone(); g2.scale(0.995, 1, 1); g2.translate(-0.003, 0, 0); g2.index && g2.setIndex(Array.from(g2.index.array).reverse()); add(g2, '#6a1e1a');
-      add(blob(0.03, 0, 0, 0.02, 0.04 * s, 0.04 * s, { w: 8, h: 6 }), q >= 3 ? '#d6a83a' : metal);
-      if (q >= 3) { box(0.01, 0.46 * s, 0.012, 0.022, 0, 0.12 * s, '#d6a83a'); box(0.01, 0.46 * s, 0.012, 0.022, 0, -0.12 * s, '#d6a83a'); }
+      // a curved rectangle with a boss and a spine; from q3 gold edging, an inner border and gold boss
+      // (the sprite's trim), lightning bolts from q4, wings round the boss at q5
+      const gold = q >= 3, th = 0.016 * s, Rc = 0.28 * s, bend = (z) => Rc - Math.sqrt(Rc * Rc - z * z);
+      const W = 0.125 * s, H = 0.235 * s, cr = 0.03 * s, outline = [];
+      const rrect = (w, h, r, out) => {
+        const corner = (cx, cy, a0) => { for (let i = 0; i <= 4; i++) { const a = a0 + i / 4 * Math.PI / 2; out.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } };
+        const edge = (z0, y0, z1, y1) => { const n = Math.ceil(Math.hypot(z1 - z0, y1 - y0) / (0.025 * s)); for (let i = 1; i < n; i++) out.push([lerp(z0, z1, i / n), lerp(y0, y1, i / n)]); };
+        corner(w - r, h - r, 0); edge(w - r, h, -w + r, h);
+        corner(-w + r, h - r, Math.PI / 2); edge(-w, h - r, -w, -h + r);
+        corner(-w + r, -h + r, Math.PI); edge(-w + r, -h, w - r, -h);
+        corner(w - r, -h + r, Math.PI * 1.5); edge(w, -h + r, w, h - r);
+        return out;
+      };
+      rrect(W, H, cr, outline);
+      shield(outline, th, bend, '#9a2a24', '#6a1e1a', gold ? '#d6a83a' : shade(metal, 0.9), 0.008 * s);
+      onFace([[0, H * 0.94], [0, -H * 0.94]], 0.022 * s, th, bend, gold ? '#b08a3a' : dwood);
+      add(blob(th / 2 + 0.002 * s, 0, 0, 0.03 * s, 0.045 * s, 0.045 * s, { w: 12, h: 8 }), gold ? '#d6a83a' : metal);
+      if (gold) { const inner = rrect(W * 0.86, H * 0.9, cr * 0.8, []); inner.push(inner[0]); onFace(inner, 0.008 * s, th, bend, '#d6a83a'); }
+      if (q >= 4) for (const [sz, sy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) onFace([[sz * 0.05 * s, sy * 0.05 * s], [sz * 0.07 * s, sy * 0.09 * s], [sz * 0.06 * s, sy * 0.1 * s], [sz * 0.085 * s, sy * 0.16 * s]], 0.008 * s, th, bend, '#d6a83a');
+      if (q >= 5) for (const sz of [1, -1]) { const arc = []; for (let i = 0; i <= 8; i++) { const a = lerp(-0.9, 0.9, i / 8); arc.push([sz * Math.cos(a) * 0.075 * s, Math.sin(a) * 0.075 * s]); } onFace(arc, 0.01 * s, th, bend, '#d6a83a'); }
       break;
     }
     // work tools
@@ -2113,7 +2331,9 @@ function propGeometryRaw(kind, q, k, opts = {}) {
   }
   const M = new Mesher();
   for (const g of parts) M.add(g);
-  return { geo: M.build(), glow };
+  const geo = M.build();
+  if (EDGE_Z.has(kind)) geo.rotateY(-Math.PI / 2);
+  return { geo, glow };
 }
 
 // ---------- materials ----------
@@ -2196,7 +2416,10 @@ function toonRamp() {
 
 // Per-surface shading added to the toon light, in view space so highlights sit at the same place
 // on screen whatever the figure's heading (a fixed key light above-left of the camera, KEY).
-//   metal   diffuse x0.75, highlight pow 30 x1.0 + pow 6 x0.25, rim x2
+//   metal   diffuse x0.75, highlight pow 30 x1.0 + pow 6 x0.25, rim x2, and 60% of the result
+//           replaced by a reflection picked by the world-space reflection vector's height: sky
+//           (albedo x1.1 plus a little blue-grey) above, ground (albedo x0.42) below, a dark horizon
+//           band (albedo x0.15) between them
 //   chain   ring pattern on the bind-pose position (rows offset by half a ring), faded out by
 //           fwidth when a ring is under ~3 px, highlight pow 14 x0.5
 //   hair    streaks around the head's vertical axis (30 per turn, x0.8..1.0, faded by fwidth), and a
@@ -2239,6 +2462,13 @@ const STYLE_LIGHT = `
       + fGloss * 0.7 * pow(nh, 50.0)
       + fLeather * 0.12 * pow(nh, 10.0)
       + fSkin * 0.05 * pow(nh, 12.0);
+    if (fMetal > 0.5) {
+      float ry = (vec4(reflect(-normalize(vViewPosition), nV), 0.0) * viewMatrix).y;
+      vec3 env = ry > 0.0
+        ? mix(fAlbedo * 0.15, fAlbedo * 1.1 + vec3(0.06, 0.07, 0.09), smoothstep(0.0, 0.18, ry))
+        : mix(fAlbedo * 0.15, fAlbedo * 0.42, smoothstep(0.0, 0.12, -ry));
+      outgoingLight = mix(outgoingLight, env + outgoingLight * 0.35, 0.6);
+    }
     outgoingLight += spec * mix(vec3(1.0), fAlbedo * 1.6 + 0.2, fMetal * 0.6);
     outgoingLight += fSkin * fAlbedo * vec3(0.08, 0.03, 0.0);
     outgoingLight += pow(1.0 - ndv, 3.0) * (0.3 + 0.6 * fMetal) * vec3(0.55, 0.62, 0.75);
@@ -2267,6 +2497,39 @@ function figureMaterial(opts, dissolve) {
   if (opts.patch) m = opts.patch(m) || m;
   withDissolve(m, dissolve);
   return stylize(m);
+}
+
+/** The outline pass: back faces pushed out a fixed number of pixels, in the surface colour darkened. */
+function outlineMaterial(opts, dissolve) {
+  const T = E(), S = shared();
+  const fog = opts.fog || { fogColor: { value: new T.Color('#000') }, fogNear: { value: 1e6 }, fogFar: { value: 1e7 } };
+  return new T.ShaderMaterial({
+    uniforms: { uPx: S.outline.uPx, uWidth: S.outline.uWidth, fogColor: fog.fogColor, fogNear: fog.fogNear, fogFar: fog.fogFar, uDissolve: dissolve, uOpacity: { value: 1 } },
+    vertexShader: OUTLINE_VS, fragmentShader: OUTLINE_FS, vertexColors: true, side: T.BackSide,
+  });
+}
+
+/** A prop mesh from propGeometry's result, with its outline and glow sprite as children. */
+function propObject(built, mat, omat) {
+  if (!built) return null;
+  const T = E(), S = shared();
+  const obj = new T.Mesh(built.geo, mat);
+  obj.frustumCulled = false;
+  if (omat) { const o = new T.Mesh(built.geo, omat); o.frustumCulled = false; obj.add(o); }
+  if (built.glow) {
+    const sp = new T.Sprite(new T.SpriteMaterial({ map: S.glowTex, color: built.glow.colour, blending: T.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.7 }));
+    sp.position.y = built.glow.y;
+    sp.scale.setScalar(built.glow.size);
+    obj.add(sp);
+    obj.userData.glow = sp;
+  }
+  return obj;
+}
+
+/** One prop on its own at figure scale 1 (the gallery's ?rack view), in grip space. */
+function prop(kind, q = 0, opts = {}) {
+  const dissolve = { value: 0 };
+  return propObject(propGeometry(kind, q, opts.k || 1, opts), figureMaterial(opts, dissolve), opts.outline === false ? null : outlineMaterial(opts, dissolve));
 }
 
 /** Adds a per-material dither dissolve (uDissolve, 0..1) after any patch the caller applied. */
@@ -2301,7 +2564,6 @@ function create(ch, opts = {}) {
   const T = E();
   const look = describe(ch);
   const { geo, bind } = buildBody(look);
-  const S = shared();
   const dissolve = { value: 0 };
   const mat = figureMaterial(opts, dissolve);
 
@@ -2324,12 +2586,7 @@ function create(ch, opts = {}) {
   group.add(mesh);
   let outline = null;
   if (opts.outline !== false) {
-    const fog = opts.fog || { fogColor: { value: new T.Color('#000') }, fogNear: { value: 1e6 }, fogFar: { value: 1e7 } };
-    const omat = new T.ShaderMaterial({
-      uniforms: { uPx: S.outline.uPx, uWidth: S.outline.uWidth, fogColor: fog.fogColor, fogNear: fog.fogNear, fogFar: fog.fogFar, uDissolve: dissolve, uOpacity: { value: 1 } },
-      vertexShader: OUTLINE_VS, fragmentShader: OUTLINE_FS, vertexColors: true, side: T.BackSide,
-    });
-    outline = new T.SkinnedMesh(geo, omat);
+    outline = new T.SkinnedMesh(geo, outlineMaterial(opts, dissolve));
     outline.bind(skeleton, mesh.bindMatrix);
     outline.frustumCulled = false;
     group.add(outline);
@@ -2337,25 +2594,13 @@ function create(ch, opts = {}) {
 
   // props
   const k = look.p.H / 1.12;
-  const pmat = figureMaterial(opts, dissolve);
+  const pmat = figureMaterial(opts, dissolve), pomat = outline ? outlineMaterial(opts, dissolve) : null;
   const propCache = new Map();
   const prop = (kind, q, o) => {
     const key = kind + ':' + q;
     if (propCache.has(key)) return propCache.get(key);
-    const built = propGeometry(kind, q, k, o);
-    let obj = null;
-    if (built) {
-      obj = new T.Mesh(built.geo, pmat);
-      obj.frustumCulled = false;
-      if (built.glow) {
-        const sp = new T.Sprite(new T.SpriteMaterial({ map: S.glowTex, color: built.glow.colour, blending: T.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.7 }));
-        sp.position.y = built.glow.y;
-        sp.scale.setScalar(built.glow.size);
-        obj.add(sp);
-        obj.userData.glow = sp;
-      }
-      obj.visible = false;
-    }
+    const obj = propObject(propGeometry(kind, q, k, o), pmat, pomat);
+    if (obj) obj.visible = false;
     propCache.set(key, obj);
     return obj;
   };
@@ -2370,6 +2615,9 @@ function create(ch, opts = {}) {
     gear.shield.position.set(look.p.r.fore + 0.012, -look.p.forearm * 0.5, 0.01);
     bones[BI.foreL].add(gear.shield);
   }
+  // kite and tower shields turn about their face normal (foreL x) so the long axis stays as near
+  // upright as the forearm allows: point down whether the arm hangs or guards across the body
+  const upright = SH && (SH.kind === 'kite' || SH.kind === 'tower'), upQ = new T.Quaternion(), upV = new T.Vector3();
   const arrow = W && W.kind === 'bow' ? prop('arrow', 0) : null;
   if (arrow) { arrow.rotation.set(Math.PI, 0, 0); arrow.position.set(0, -0.22 * k, 0); bones[BI.gripR].add(arrow); }
   const tools = {};
@@ -2421,7 +2669,7 @@ function create(ch, opts = {}) {
     },
     dispose() {
       geo.dispose(); mat.dispose(); pmat.dispose();
-      if (outline) outline.material.dispose();
+      if (outline) { outline.material.dispose(); pomat.dispose(); }
       for (const o of propCache.values()) if (o) { o.geometry.dispose(); if (o.userData.glow) o.userData.glow.material.dispose(); }
       skeleton.dispose();
     },
@@ -2536,6 +2784,11 @@ function create(ch, opts = {}) {
     const fighting = A.props === 'gear';
     show(gear.weapon, fighting);
     show(gear.shield, fighting);
+    if (upright && fighting) {
+      bones[BI.foreL].getWorldQuaternion(upQ);
+      upV.set(0, 1, 0).applyQuaternion(upQ.invert());
+      gear.shield.rotation.x = Math.atan2(upV.z, upV.y);
+    }
     show(arrow, fighting && A.clip && A.clip.shot === 'arrow' && A.clip.t < A.clip.dur * A.clip.hit);
     for (const key in tools) show(tools[key], false);
     if (A.props === 'tool' && A.job) {
@@ -3144,7 +3397,7 @@ function viewport(width, height, widthPx = 1.25) {
 }
 
 window.Figure3D = {
-  describe, signature, create, effects, viewport, BONES, JOB_TOOLS,
+  describe, signature, create, prop, effects, viewport, BONES, JOB_TOOLS,
   ready: () => typeof window.THREE === 'object' && window.THREE !== null,
 };
 })();

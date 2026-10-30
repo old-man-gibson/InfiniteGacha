@@ -53,7 +53,8 @@
 // Gallery for figure3d.js: rolls characters with lpc.js, shows each sprite next to its model, and
 // drives every animation layer. URL: ?seed=N (repeatable rolls), ?mode=fight, ?race=orc, ?n=12,
 // ?zoom=2, ?focus=3, ?gear=0, ?kit=light|medium|heavy, ?layout=row, ?gap=0.6, ?pitch=20, ?yaw=0.5, ?ty=1.0 (look-at height),
-// ?job=mining, ?energy=0.2, ?hurt=1.
+// ?job=mining, ?energy=0.2, ?hurt=1, ?weapon=sword and ?shield=kite (quality 0..5 along the row),
+// ?calm=1 (fight stance without blows), ?rack=sword,axe (the props alone, a row per kind, quality 0..5).
 const Q = new URLSearchParams(location.search);
 // ?seed=N: rolls draw from their own seeded stream, installed as Math.random (and rng.js's rand,
 // which stats.js uses) only while rolling. three.js takes Math.random UUIDs for every geometry,
@@ -72,10 +73,11 @@ function seeded(fn) {
 const MODES = ['idle', 'walk', 'run', 'work', 'fight', 'talk', 'sit', 'fall'];
 const JOBS = ['mixed', 'mining', 'farming', 'foraging', 'smithing', 'alchemy', 'cooking', 'maintenance', 'building', 'training'];
 let mode = Q.get('mode') || 'idle';
+const CALM = Q.get('calm') === '1';
 let renderer, scene, camera, fx, figs = [], clock = 0, last = 0;
 const cam = { yaw: +(Q.get('yaw') || 0.25), d: 15, tx: 0, tz: 0.3, want: null, pitch: +(Q.get('pitch') || 58) };
 
-function randomGear() {
+function randomGear(i) {
   const q = () => Math.floor(Math.random() * 6);
   const pick = (a) => a[Math.floor(Math.random() * a.length)];
   const e = {};
@@ -86,7 +88,7 @@ function randomGear() {
     e.weapon = { key: w, type: w, quality: q(), slot: 'weapon' };
     if (kit !== 'light') { const o = kit === 'heavy' ? 'tower' : 'kite'; e.offhand = { key: o, type: o, quality: q(), slot: 'offhand' }; }
     for (const [slot, piece] of [['head', 'helm'], ['body', 'mail'], ['feet', 'boots']]) e[slot] = { key: kit + '_' + piece, type: kit, quality: q(), slot };
-    return e;
+    return carried(e, i);
   }
   const w = pick(['sword', 'axe', 'spear', 'bow', 'dagger', 'staff']);
   e.weapon = { key: w, type: w, quality: q(), slot: 'weapon' };
@@ -94,26 +96,61 @@ function randomGear() {
   for (const [slot, piece, p] of [['head', 'helm', 0.45], ['body', 'mail', 0.6], ['feet', 'boots', 0.5]]) {
     if (Math.random() < p) { const t = pick(['light', 'medium', 'heavy']); e[slot] = { key: t + '_' + piece, type: t, quality: q(), slot }; }
   }
+  return carried(e, i);
+}
+// ?weapon= / ?shield= replace what was rolled, with quality i % 6
+function carried(e, i) {
+  const w = Q.get('weapon'), o = Q.get('shield');
+  if (w) e.weapon = { key: w, type: w, quality: i % 6, slot: 'weapon' };
+  if (o) e.offhand = { key: o, type: o, quality: i % 6, slot: 'offhand' };
+  else if (w) delete e.offhand;
   return e;
 }
 
-function makeChar(race) {
+function makeChar(race, i) {
   const ch = LPC.generate(race || null);
   ch.id = Math.floor(Math.random() * 1e9);
   ch.temper = { nerve: Math.round(8 + Math.random() * 84) };
-  if (document.getElementById('gear').checked && Q.get('gear') !== '0') ch.equipment = randomGear();
+  if (document.getElementById('gear').checked && Q.get('gear') !== '0') ch.equipment = randomGear(i);
   return ch;
 }
 
 function short(id) { return id ? id.split('/').pop().replace(/^(hair|heads|torso_clothes|legs|feet)_/, '') : '-'; }
 
+// ?rack: one row per kind, bottom of each prop on the row's line, turned so the blade, head or face shows
+const RACK = Q.get('rack') ? Q.get('rack').split(',') : null;
+const RACK_TURN = { sword: Math.PI / 2, dagger: Math.PI / 2, axe: Math.PI / 2, spear: Math.PI / 2, bow: Math.PI / 2, buckler: -Math.PI / 2, kite: -Math.PI / 2, tower: -Math.PI / 2 };
+let racked = [], rackH = 0;
+function rack() {
+  for (const m of racked) scene.remove(m);
+  racked = [];
+  let y = 0;
+  for (const kind of RACK.slice().reverse()) {
+    let h = 0;
+    for (let q = 0; q < 6; q++) {
+      const m = Figure3D.prop(kind, q);
+      if (!m) continue;
+      m.rotation.y = (RACK_TURN[kind] || 0) + +(Q.get('turn') || 0);
+      m.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(m);
+      m.position.set((q - 2.5) * +(Q.get('gap') || 0.4), y - box.min.y, 0);
+      h = Math.max(h, box.max.y - box.min.y);
+      scene.add(m);
+      racked.push(m);
+    }
+    y += h + 0.12;
+  }
+  rackH = y;
+}
+
 function roll() {
   for (const f of figs) { scene.remove(f.fig.group); scene.remove(f.shadow); f.fig.dispose(); }
   figs = [];
+  if (RACK) return rack();
   const list = document.getElementById('list');
   list.innerHTML = '';
   const n = +(Q.get('n') || 12), cols = Math.min(4, n), race = document.getElementById('race').value || Q.get('race') || '';
-  const chars = seeded(() => Array.from({ length: n }, () => makeChar(race)));
+  const chars = seeded(() => Array.from({ length: n }, (_, i) => makeChar(race, i)));
   for (let i = 0; i < n; i++) {
     const ch = chars[i];
     const fig = Figure3D.create(ch, {});
@@ -226,7 +263,7 @@ function frame(now) {
   const W = renderer.domElement.clientWidth, H = renderer.domElement.clientHeight;
   if (renderer.domElement.width !== Math.floor(W * renderer.getPixelRatio())) { renderer.setSize(W, H, false); camera.aspect = W / H; camera.updateProjectionMatrix(); }
   if (cam.want) { const k = 1 - Math.exp(-dt * 5); cam.tx += (cam.want.x - cam.tx) * k; cam.tz += (cam.want.z - cam.tz) * k; cam.d += (cam.want.d - cam.d) * k; }
-  const pitch = cam.pitch * Math.PI / 180, ty = Q.get('ty') ? +Q.get('ty') : cam.d < 5 ? 0.55 : 0.3;
+  const pitch = cam.pitch * Math.PI / 180, ty = Q.get('ty') ? +Q.get('ty') : RACK ? rackH / 2 : cam.d < 5 ? 0.55 : 0.3;
   camera.position.set(cam.tx + Math.sin(cam.yaw) * Math.cos(pitch) * cam.d, ty + Math.sin(pitch) * cam.d, cam.tz + Math.cos(cam.yaw) * Math.cos(pitch) * cam.d);
   camera.lookAt(cam.tx, ty, cam.tz);
 
@@ -244,8 +281,8 @@ function frame(now) {
       job = jobSel === 'mixed' ? JOBS[1 + (f.i % (JOBS.length - 1))] : jobSel;
     } else if (mode === 'fight') {
       m = 'fight'; props = 'gear'; face = { x, z: z + 2 };
-      if (clock > f.nextStrike) { f.fig.trigger('strike', { at: new THREE.Vector3(x, 0.7, z + 1.6) }); f.nextStrike = clock + 1.4 + Math.random() * 1.8; }
-      if (clock > f.nextHit) { const r = Math.random(); f.fig.trigger(r < 0.6 ? 'hit' : r < 0.8 ? 'dodge' : 'block', { from: { x, z: z + 2 } }); if (r < 0.6) fx.burst(new THREE.Vector3(x, f.fig.height * 0.7, z + 0.1), 'hit'); f.nextHit = clock + 2.5 + Math.random() * 3; }
+      if (!CALM && clock > f.nextStrike) { f.fig.trigger('strike', { at: new THREE.Vector3(x, 0.7, z + 1.6) }); f.nextStrike = clock + 1.4 + Math.random() * 1.8; }
+      if (!CALM && clock > f.nextHit) { const r = Math.random(); f.fig.trigger(r < 0.6 ? 'hit' : r < 0.8 ? 'dodge' : 'block', { from: { x, z: z + 2 } }); if (r < 0.6) fx.burst(new THREE.Vector3(x, f.fig.height * 0.7, z + 0.1), 'hit'); f.nextHit = clock + 2.5 + Math.random() * 3; }
     } else if (mode === 'talk') {
       m = 'talk';
       const partner = figs[f.i ^ 1];
