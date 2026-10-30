@@ -279,6 +279,7 @@ const bake = (a, size) => Tokens.pog(a.layers, {
 function faces(s, { size = null } = {}) {
   for (const a of s.actors.filter(x => x.role === 'squad' && !x.token)) {
     const ch = a.char && a.char.selections ? a.char : LPC.generate();
+    if (ch !== a.char) a.lookChar = ch;          // world3d.js builds the 3D model from the same roll
     LPC.buildLayers(ch).then(layers => {
       a.layers = layers;
       // pogSize is read HERE, not when faces() was called: a zoom while the art was still

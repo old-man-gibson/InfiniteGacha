@@ -1,7 +1,8 @@
 // The mission field in three dimensions. Browser only: window.World3D.
 // Depends on three.js (window.THREE, put there by the page's loader — see THREE_LOADER below),
 // mapgen.js (tile codes), tokens.js (rim colours, grade sizes), lpc.js (walk sheets) and
-// fieldview.js (the zone and portal drawing, and the token follow).
+// fieldview.js (the zone and portal drawing, and the token follow). Uses figure3d.js (character
+// models) when the page loads it.
 //
 // It also draws the home town (renderTown), from townmap.js's ground and townlife.js's walkers,
 // on the same terrain and scenery code with a style of its own. The town's floors are raised
@@ -26,9 +27,12 @@
 //   - Fog of war and the zone/portal rings are both textures over map space, sampled in the
 //     terrain shader by world x,z. The rings are drawn by fieldview.js's own drawZones() into
 //     an offscreen canvas, so the 3D view shows exactly what the flat one does.
-//   - Actors are billboards. Every fragment of a billboard is written at the depth of the
-//     actor's feet, so a figure is hidden by what stands in front of where it stands and never
-//     clipped by a wall or slope behind it — the usual 2.5D sorting, done in the depth buffer.
+//   - Squad members and townsfolk are figure3d.js models (one skinned mesh each, animated from
+//     what the field or the town says they are doing) when figure3d.js is loaded. Monsters, and
+//     characters without an LPC record, are billboards. Every fragment of a billboard is written
+//     at the depth of the actor's feet, so a figure is hidden by what stands in front of where it
+//     stands and never clipped by a wall or slope behind it — the usual 2.5D sorting, done in the
+//     depth buffer.
 
 (() => {
 const T = Mapgen.T;
@@ -382,6 +386,8 @@ function create(cv, { fill = false } = {}) {
     world = null;
     for (const o of objs.values()) disposeActor(o);
     objs.clear();
+    if (fx) fx.clear();
+    blows.length = 0;
   }
 
   /** `at` answers for the margin too: Mapgen's at() says wall out of bounds, the town says grass. */
@@ -1455,6 +1461,7 @@ function create(cv, { fill = false } = {}) {
 
   function disposeActor(o) {
     scene.remove(o.group);
+    if (o.fig) { scene.remove(o.fig.group); o.fig.dispose(); o.fig = null; }
     o.group.traverse(c => {
       if (c.material) c.material.dispose();
       if (c.geometry && c.geometry !== BB_GEO && !Object.values(shared).includes(c.geometry)) c.geometry.dispose();
@@ -1510,6 +1517,200 @@ function create(cv, { fill = false } = {}) {
     return t;
   }
 
+  // ---------- 3D figures (figure3d.js) ----------
+  // A character with an LPC record is drawn as a Figure3D model when figure3d.js is loaded; the
+  // walk-sheet billboard stays as the fallback. A model takes about 5 ms to build, so models are
+  // built until FIG_BUDGET_MS of the frame is spent and the rest keep their billboard until a
+  // later frame. A model is rebuilt when Figure3D.signature changes (selections or equipped
+  // items), checked once a second.
+  const FIG_BUDGET_MS = 8;
+  let figBudget = 0, fx = null;
+  const figPatch = (m) => patchMaterial(m, U);
+  const effects = () => fx || (typeof Figure3D !== 'undefined' ? (fx = Figure3D.effects(scene)) : null);
+
+  function figureFor(o, ch) {
+    if (o.fig && clockMs - (o.sigAt || 0) > 1000) {
+      o.sigAt = clockMs;
+      if (Figure3D.signature(ch) !== o.figSig) { scene.remove(o.fig.group); o.fig.dispose(); o.fig = null; }
+    }
+    if (o.fig) return o.fig;
+    if (!ch || !ch.selections || typeof Figure3D === 'undefined' || performance.now() > figBudget) return null;
+    o.fig = Figure3D.create(ch, { patch: figPatch, fog: fogU });
+    o.figSig = Figure3D.signature(ch);
+    o.sigAt = clockMs;
+    o.fig.onEmit((e) => figEmit(e));
+    scene.add(o.fig.group);
+    if (o.body) { o.group.remove(o.body); o.body.material.dispose(); o.body = null; }
+    if (o.label) o.label.position.y = o.fig.height + 0.22;
+    o.shadow.scale.setScalar(o.fig.height * 0.75);
+    return o.fig;
+  }
+
+  /** Projectiles and work sparks a figure emits at the moment of release or impact. */
+  function figEmit(e) {
+    const f = effects();
+    if (!f) return;
+    if ((e.type === 'arrow' || e.type === 'orb') && e.to) f.shoot(e.type, e.from, e.to);
+    else if (e.type === 'sparks') f.burst(e.from, 'spark');
+    else if (e.type === 'thud') f.burst(e.from, 'dust');
+  }
+
+  // ---------- fight playback ----------
+  // field.js resolves a skirmish when it opens and plays its log out over its duration (sk.at is
+  // the number of lines played). Each newly played line is read for the names of the actors in that
+  // skirmish: the first name found is the one acting, a later name is the one acted on, and the verb
+  // picks the reaction (hits / takes a hit -> hit, dodges / is missed -> dodge, parries -> block,
+  // falls / goes down -> fall, heals -> heal). Lines that arrive in one step are spread across that
+  // step. A line that names one actor ("X takes a hit", the plain resolver) gets its nearest
+  // opponent as the attacker. Nothing here is written back to the field.
+  const skSeen = new WeakMap();
+  const blows = [];                   // { at: clockMs, fn }
+
+  function playSkirmishes(s) {
+    const step = (typeof MissionTypes !== 'undefined' && MissionTypes.TIME) ? MissionTypes.TIME.stepMs : 200;
+    for (const sk of s.skirmishes || []) {
+      let seen = skSeen.get(sk);
+      if (seen == null) { seen = sk.at || 0; skSeen.set(sk, seen); }
+      if ((sk.at || 0) <= seen) continue;
+      const lines = sk.log.slice(seen, sk.at);
+      skSeen.set(sk, sk.at);
+      lines.forEach((line, i) => blows.push({ at: clockMs + (i + 0.3 * Math.random()) * step / lines.length, fn: () => blow(sk, line) }));
+    }
+    for (let i = blows.length - 1; i >= 0; i--) if (blows[i].at <= clockMs) { const b = blows[i]; blows.splice(i, 1); b.fn(); }
+  }
+
+  /** Actors named in a line, in the order they appear. Shared names go to a random bearer. */
+  function namesIn(line, cast) {
+    const byName = new Map();
+    for (const a of cast) {
+      for (const n of new Set([a.label, a.name, a.char && a.char.name, a.fighter && a.fighter.name])) {
+        if (!n || n.length < 2) continue;
+        if (!byName.has(n)) byName.set(n, []);
+        byName.get(n).push(a);
+      }
+    }
+    const names = [...byName.keys()].sort((p, q) => q.length - p.length), taken = [], out = [];
+    for (const n of names) {
+      for (let i = line.indexOf(n); i >= 0; i = line.indexOf(n, i + 1)) {
+        if (taken.some(([s0, e0]) => i < e0 && i + n.length > s0)) continue;
+        taken.push([i, i + n.length]);
+        const who = byName.get(n);
+        out.push({ a: who[Math.floor(Math.random() * who.length)], at: i });
+      }
+    }
+    return out.sort((p, q) => p.at - q.at);
+  }
+
+  function blow(sk, line) {
+    const found = namesIn(line, [...sk.ours, ...sk.theirs]);
+    if (!found.length) return;
+    const actor = found[0].a, target = found.find(f => f.a !== actor);
+    const t = target ? target.a : null, L = line.toLowerCase();
+    // a fall is the last blow: the nearest opponent swings it, then the target goes down
+    if (/falls|goes down|is down|is dead/.test(L)) return strike(nearestFoe(sk, actor), actor, 'fall');
+    if (/takes a hit/.test(L)) return strike(nearestFoe(sk, actor), actor, 'hit');
+    if (!t) return;
+    if (/parries/.test(L)) { strike(t, actor, 'block'); setTimeout(() => strike(actor, t, 'hit'), 260); return; }
+    if (/dodges|is missed/.test(L)) return strike(actor, t, 'dodge');
+    if (/heals/.test(L)) { const o = objs.get(actor.id); if (o && o.fig) o.fig.trigger('cast', {}); react(t, 'heal', actor, 450); return; }
+    if (/\bhits\b|→| for \d/.test(line)) strike(actor, t, 'hit');
+  }
+
+  function nearestFoe(sk, a) {
+    const foes = (sk.ours.includes(a) ? sk.theirs : sk.ours).filter(f => f.alive);
+    let best = null, bd = Infinity;
+    for (const f of foes) { const d = (f.x - a.x) ** 2 + (f.y - a.y) ** 2; if (d < bd) { bd = d; best = f; } }
+    return best;
+  }
+
+  /** Where an actor is drawn, at a fraction of its height. */
+  function pointOf(a, k = 0.6) {
+    const o = objs.get(a.id);
+    if (!o) return null;
+    const p = o.group.position, h = o.fig ? o.fig.height : (o.h || 1);
+    return new THREE.Vector3(p.x, p.y + h * k, p.z);
+  }
+
+  /** The attacker swings (a figure) or lunges (a billboard); the target reacts when the blow lands. */
+  function strike(att, tgt, outcome) {
+    if (!tgt) return;
+    if (!att && outcome === 'fall') return fell(tgt);
+    const oa = att && objs.get(att.id), at = pointOf(tgt);
+    let delay = 120;
+    if (oa && oa.fig && at) {
+      oa.fig.trigger('strike', { at });
+      delay = oa.fig.cls === 'bow' || oa.fig.cls === 'staff' ? 760 : 360;
+    } else if (oa && oa.kind === 'enemy' && at) {
+      const p = oa.group.position, dx = at.x - p.x, dz = at.z - p.z, l = Math.hypot(dx, dz) || 1;
+      oa.kick = { t0: clockMs, dx: dx / l * 0.3, dz: dz / l * 0.3 };
+      delay = 170;
+    }
+    react(tgt, outcome, att, delay);
+  }
+
+  function react(tgt, outcome, att, delay) {
+    setTimeout(() => {
+      const o = objs.get(tgt.id);
+      if (!o) return;
+      const from = att ? pointOf(att) : null;
+      if (outcome === 'fall') fell(tgt);
+      else if (o.fig) o.fig.trigger(outcome, { from: from ? { x: from.x, z: from.z } : null });
+      else if (o.kind === 'enemy') {
+        if (outcome === 'hit') o.flashAt = clockMs;
+        if (outcome === 'dodge') o.kick = { t0: clockMs, dx: (Math.random() - 0.5) * 0.4, dz: (Math.random() - 0.5) * 0.4 };
+      }
+      const f = effects(), p = pointOf(tgt, outcome === 'heal' ? 0.5 : 0.62);
+      if (f && p && (outcome === 'hit' || outcome === 'fall' || outcome === 'heal')) f.burst(p, outcome === 'heal' ? 'heal' : 'hit');
+    }, delay);
+  }
+
+  function fell(a) {
+    const o = objs.get(a.id);
+    if (!o) return;
+    if (o.fig) o.fig.trigger('fall', {});
+    else if (o.kind === 'enemy' && !o.downAt) o.downAt = clockMs;
+  }
+
+  /** Field input for a squad member's figure: fight stance toward the nearest foe while engaged. */
+  function driveSquad(a, o, x, y, z, dt) {
+    const sk = a.engaged;
+    let face = null;
+    if (sk && sk.ours) {
+      const foe = nearestFoe(sk, a);
+      if (foe && foe.rx != null) face = { x: foe.rx + 0.5, z: foe.ry + 0.5 };
+    }
+    const frac = a.fighter ? a.fighter.hp / a.fighter.maxHp : a.maxHp ? a.hp / a.maxHp : 1;
+    o.fig.update(dt / 1000, {
+      x, y, z, mode: sk ? 'fight' : 'idle', face, props: 'gear',
+      energy: Math.min(1, 0.35 + frac), hurt: frac < 0.4 || a.ringColour === Tokens.RINGS.hurt,
+    });
+  }
+
+  /**
+   * Town input for a walker's figure, from facts the town already has: at their post (or their
+   * construction site) they work with the job's tool; off shift beside the friend they came to
+   * find, they talk; hurt or spent at their own lodging, they sit; heading out on a mission they
+   * carry their weapon. Energy is stamina and morale (condition.js).
+   */
+  function folkInput(sim, a, x, y, z) {
+    const c = a.char || {};
+    const arrived = !!a.spot && Math.hypot(a.spot.x - a.x, a.spot.y - a.y) < 0.6;
+    const co = typeof Condition !== 'undefined' && c.cond ? Condition : null;
+    const spent = co ? co.isSpent(c) : false;
+    let mode = 'idle', job = null, props = 'none', face = null;
+    const jobPlot = c.job && typeof TownMap !== 'undefined' ? TownMap.plotForJob(sim.map, c.job) : null;
+    if (c.mission) props = 'gear';
+    else if (c.building && a.goal === 'bed:' + c.building) { job = 'building'; props = 'tool'; if (arrived) mode = 'work'; }
+    else if (jobPlot && a.goal === jobPlot.key) { job = c.job; props = c.job === 'training' ? 'none' : 'tool'; if (arrived) mode = 'work'; }
+    else if (arrived && a.goal && a.goal.startsWith('bed:') && (c.injured > 0 || spent)) mode = 'sit';
+    else if (a.near != null) {
+      const f = sim.folk.find(b => b.id === a.near && !b.gone);
+      if (f && Math.hypot(f.x - a.x, f.y - a.y) < 2.4) { mode = 'talk'; face = { x: f.x + 0.5, z: f.y + 0.5 }; }
+    }
+    const energy = co ? 0.6 * co.staminaFrac(c) + 0.4 * co.moraleFrac(c) : 1;
+    return { x, y, z, mode, job, face, props, energy, hurt: c.injured > 0 };
+  }
+
   function makeActor(a) {
     const group = new THREE.Group();
     const o = { group, kind: null, ownTex: [] };
@@ -1559,6 +1760,7 @@ function create(cv, { fill = false } = {}) {
   function syncActors(s, dt) {
     const live = s.actors.filter(a => (a.alive || a.subdued) && !a.extracted);
     const ids = new Set();
+    figBudget = performance.now() + FIG_BUDGET_MS;
     const ours = live.filter(a => a.role === 'squad');
     const faceX = ours.length ? ours.reduce((n, a) => n + a.x, 0) / ours.length : s.map.w / 2;
     for (const a of live) {
@@ -1600,12 +1802,27 @@ function create(cv, { fill = false } = {}) {
         }
         // the art faces left: mirror it when it stands left of the squad, so it faces them
         const mirror = Tokens.facesRight(a.x, faceX);
-        o.body.material.uniforms.uUv.value.set(mirror ? 1 : 0, 0, mirror ? -1 : 1, 1);
-        o.body.material.uniforms.uOpacity.value = (a.subdued ? 0.5 : 1) * lit;
+        const u = o.body.material.uniforms;
+        u.uUv.value.set(mirror ? 1 : 0, 0, mirror ? -1 : 1, 1);
+        // fight playback: a lunge toward the target, a flash when hit, a slump when down
+        if (o.kick) {
+          const k = (clockMs - o.kick.t0) / 320;
+          if (k >= 1) o.kick = null;
+          else { const e = Math.sin(Math.PI * k); o.group.position.x += o.kick.dx * e; o.group.position.z += o.kick.dz * e; }
+        }
+        const fl = o.flashAt ? Math.max(0, 1 - (clockMs - o.flashAt) / 260) : 0;
+        u.uTint.value.setRGB(1 + fl * 1.4, 1 + fl * 0.5, 1 + fl * 0.4);
+        const down = o.downAt ? Math.min(1, (clockMs - o.downAt) / 500) : 0;
+        u.uSize.value.y = o.h * (1 - 0.45 * down);
+        u.uOpacity.value = (a.subdued ? 0.5 : 1) * lit * (1 - 0.35 * down);
         o.shadow.material.opacity = lit;
         continue;
       }
-      // squad: a walking LPC figure, row chosen by the direction of travel on screen
+      if (o.ring) o.ring.material.color.set(a.ringColour || Tokens.RINGS.squad);
+      // squad: a 3D model when the character has an LPC record (FieldView.faces keeps the one it
+      // generated for a squad without a character as a.lookChar)
+      if (figureFor(o, a.char && a.char.selections ? a.char : a.lookChar)) { driveSquad(a, o, x, gy, z, dt); continue; }
+      // ...else a walking LPC billboard, row chosen by the direction of travel on screen
       if (a.layers && !o.body) {
         const sheet = walkSheet(a.layers);
         o.ownTex.push(sheet);
@@ -1613,13 +1830,43 @@ function create(cv, { fill = false } = {}) {
         o.group.add(o.body);
         o.label.position.y = 1.5;
       }
-      if (o.ring) o.ring.material.color.set(a.ringColour || Tokens.RINGS.squad);
       if (!o.body) continue;
       stepWalk(o, prevX == null ? 0 : a.rx - prevX, prevY == null ? 0 : a.ry - prevY, dt);
       const hurt = a.ringColour === Tokens.RINGS.down;
       o.body.material.uniforms.uTint.value.setScalar(hurt ? 0.55 : 1);
     }
-    for (const [id, o] of objs) if (!ids.has(id)) { disposeActor(o); objs.delete(id); }
+    // Gone from the field. The dead stay where they fell for a while: a squad model plays its fall
+    // and lies there for CORPSE_MS, then dissolves; a monster's billboard slumps and fades.
+    const CORPSE_MS = 4500, FADE_MS = 700;
+    for (const [id, o] of objs) {
+      if (ids.has(id)) continue;
+      if (!o.goneAt) {
+        const a = s.actors.find(x => x.id === id);
+        if (a && !a.alive && !a.extracted && (o.fig || o.kind === 'enemy')) {
+          o.goneAt = clockMs;
+          o.group.children.forEach(c => { if (c !== o.body) c.visible = false; });
+          if (o.fig) o.fig.trigger('fall', {});
+          else if (!o.downAt) o.downAt = clockMs;
+        }
+      }
+      if (o.goneAt) {
+        const left = o.fig ? CORPSE_MS : 0, k = (clockMs - o.goneAt - left) / FADE_MS;
+        if (k < 1) {
+          if (o.fig) {
+            const p = o.fig.group.position;
+            o.fig.update(dt / 1000, { x: p.x, y: p.y, z: p.z, mode: 'down' });
+            o.fig.opacity = 1 - Math.max(0, k);
+          } else if (o.body) {
+            const u = o.body.material.uniforms;
+            u.uSize.value.y = o.h * 0.55 * (1 - 0.5 * Math.max(0, k));
+            u.uOpacity.value = 0.65 * (1 - Math.max(0, k));
+          }
+          continue;
+        }
+      }
+      disposeActor(o);
+      objs.delete(id);
+    }
   }
 
   /** Pick the walk row from the direction of travel and step the frame by distance walked. */
@@ -1637,8 +1884,9 @@ function create(cv, { fill = false } = {}) {
    * The town's people, from TownLife.onFoot(). They are drawn where the town sim puts them
    * (it moves them smoothly already), with the rim colour townview.js would give them.
    */
-  function syncFolk(folk, dt, { hoverId = null, ringFor = null } = {}) {
+  function syncFolk(folk, dt, { hoverId = null, ringFor = null, sim = null } = {}) {
     const ids = new Set();
+    figBudget = performance.now() + FIG_BUDGET_MS;
     for (const a of folk) {
       ids.add(a.id);
       let o = objs.get(a.id);
@@ -1646,8 +1894,10 @@ function create(cv, { fill = false } = {}) {
       const x = a.x + 0.5, z = a.y + 0.5;
       const dx = o.px == null ? 0 : x - o.px, dz = o.pz == null ? 0 : z - o.pz;
       o.px = x; o.pz = z;
-      o.group.position.set(x, world.heightAt(x, z), z);
-      if (a.layers && !o.body) {
+      const gy = world.heightAt(x, z);
+      o.group.position.set(x, gy, z);
+      if (sim && figureFor(o, a.char)) o.fig.update(dt / 1000, folkInput(sim, a, x, gy, z));
+      else if (a.layers && !o.body) {
         const sheet = walkSheet(a.layers);
         o.ownTex.push(sheet);
         o.body = billboard(sheet, fogU, { w: 1.55, h: 1.55, foot: 3 / 64 });
@@ -1658,7 +1908,7 @@ function create(cv, { fill = false } = {}) {
       o.ring.material.color.set(hovered ? '#ffd740' : (ringFor ? ringFor(a) : Tokens.RINGS.squad));
       o.ring.scale.setScalar(hovered ? 1.35 : 1);
       o.hovered = hovered;
-      if (o.body) stepWalk(o, dx, dz, dt);
+      if (o.body && !o.fig) stepWalk(o, dx, dz, dt);
     }
     for (const [id, o] of objs) if (!ids.has(id)) { disposeActor(o); objs.delete(id); }
   }
@@ -1762,6 +2012,8 @@ function create(cv, { fill = false } = {}) {
     if (clockMs - lastOverlayAt > 100 || lastOverlayAt < 0) { updateOverlay(s); lastOverlayAt = clockMs; }
     const cam = placeCamera(want, dt);
     syncActors(s, dt);
+    playSkirmishes(s);
+    if (fx) fx.update(dt / 1000);
     updatePortal(s);
     updateMotes(dt);
     const ours = s.actors.filter(a => a.role === 'squad' && a.alive && !a.extracted && a.rx != null);
@@ -1790,6 +2042,8 @@ function create(cv, { fill = false } = {}) {
   }
 
   function draw(cam, pxPerUnit) {
+    // figure outlines are a fixed width in drawing-buffer pixels
+    if (typeof Figure3D !== 'undefined') Figure3D.viewport(cv.width, cv.height, 1.2 * renderer.getPixelRatio());
     renderer.clear();
     renderer.render(scene, camera);
     renderer.render(vigScene, vigCam);
@@ -1832,7 +2086,8 @@ function create(cv, { fill = false } = {}) {
     }
     if (clockMs - lastOverlayAt > 66 || lastOverlayAt < 0) { drawThreads(knots || []); lastOverlayAt = clockMs; }
     const cam = placeCamera(want, dt);
-    syncFolk(sim.folk ? sim.folk.filter(a => !a.gone) : [], dt, opts);
+    syncFolk(sim.folk ? sim.folk.filter(a => !a.gone) : [], dt, Object.assign({ sim }, opts));
+    if (fx) fx.update(dt / 1000);
     updateMotes(dt);
     animateTown(dt, opts.state || null);
     U.uRoofCut.value = sstep(2.2, 3.2, cam.zoom);
@@ -1849,6 +2104,7 @@ function create(cv, { fill = false } = {}) {
 
   function dispose() {
     disposeWorld();
+    if (fx) { fx.dispose(); fx = null; }
     for (const t of enemyTex.values()) t.n.dispose();
     enemyTex.clear();
     for (const v of Object.values(shared)) v.dispose();

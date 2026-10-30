@@ -431,7 +431,7 @@ async function loadCatalog() {
   }
   return CAT;
 }
-window.LPC = { loadCatalog, generate, buildLayers, drawFrame, activeRaces, rollRace, rollHeroic, applyHeroicBonus, RACE_WEIGHTS, FRAME, FRAMES, ROW_DOWN, itemName: (id) => (CAT.items[id] || {}).name || id };
+window.LPC = { loadCatalog, catalog: () => CAT, generate, buildLayers, drawFrame, activeRaces, rollRace, rollHeroic, applyHeroicBonus, RACE_WEIGHTS, FRAME, FRAMES, ROW_DOWN, itemName: (id) => (CAT.items[id] || {}).name || id };
 
 // ---------- page ----------
 // A grid of sprites all walking at once is a recomposite per canvas per frame, enough to make the

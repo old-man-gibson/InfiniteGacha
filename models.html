@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D figures</title>
+<style>
+  :root { --bg: #1a1c21; --panel: #23262d; --line: #343842; --text: #dcdfe6; --dim: #8b919e; --accent: #5b86d6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.35 system-ui, sans-serif; display: flex; height: 100vh; overflow: hidden; }
+  #view { flex: 1; position: relative; min-width: 0; }
+  #c { width: 100%; height: 100%; display: block; }
+  .bar { position: absolute; left: 10px; top: 10px; right: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; pointer-events: none; }
+  .bar > * { pointer-events: auto; }
+  button, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 9px; font: inherit; cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  label { color: var(--dim); display: inline-flex; gap: 4px; align-items: center; background: rgba(20,22,27,.7); padding: 3px 7px; border-radius: 5px; }
+  #side { width: 290px; background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+  #side header { padding: 10px; display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+  #list { overflow: auto; flex: 1; padding: 6px; }
+  .card { display: flex; gap: 8px; align-items: center; padding: 5px; border-radius: 6px; cursor: pointer; }
+  .card:hover, .card.sel { background: #2d313a; }
+  .card canvas { width: 64px; height: 64px; image-rendering: pixelated; background: #2f333c; border-radius: 4px; flex: none; }
+  .card b { display: block; }
+  .card span { color: var(--dim); font-size: 11.5px; }
+  #note { position: absolute; left: 10px; bottom: 10px; color: var(--dim); background: rgba(20,22,27,.7); padding: 4px 8px; border-radius: 5px; }
+  @media (max-width: 700px) { body { flex-direction: column; } #side { width: 100%; height: 40vh; } }
+</style>
+</head>
+<body>
+<div id="view">
+  <canvas id="c"></canvas>
+  <div class="bar" id="modes"></div>
+  <div id="note">drag to turn, wheel to zoom, click a card to look at one figure</div>
+</div>
+<div id="side">
+  <header>
+    <select id="race"><option value="">any race</option></select>
+    <button id="reroll">Roll</button>
+    <label><input type="checkbox" id="gear" checked> gear</label>
+    <select id="job"></select>
+    <label>energy <input type="range" id="energy" min="0" max="1" step="0.05" value="1" style="width:70px"></label>
+    <label><input type="checkbox" id="hurt"> hurt</label>
+  </header>
+  <div id="list"></div>
+</div>
+<script src="rng.js"></script>
+<script src="stats.js"></script>
+<script src="gear.js"></script>
+<script src="lpc.js"></script>
+<script src="figure3d.js"></script>
+<script>
+// Gallery for figure3d.js: rolls characters with lpc.js, shows each sprite next to its model, and
+// drives every animation layer. URL: ?seed=N (repeatable rolls), ?mode=fight, ?race=orc, ?n=12,
+// ?zoom=2, ?focus=3, ?gear=0, ?layout=row, ?pitch=20, ?yaw=0.5, ?job=mining, ?energy=0.2, ?hurt=1.
+const Q = new URLSearchParams(location.search);
+if (Q.get('seed')) {
+  let a = +Q.get('seed') >>> 0;
+  Math.random = () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const MODES = ['idle', 'walk', 'run', 'work', 'fight', 'talk', 'sit', 'fall'];
+const JOBS = ['mixed', 'mining', 'farming', 'foraging', 'smithing', 'alchemy', 'cooking', 'maintenance', 'building', 'training'];
+let mode = Q.get('mode') || 'idle';
+let renderer, scene, camera, fx, figs = [], clock = 0, last = 0;
+const cam = { yaw: +(Q.get('yaw') || 0.25), d: 15, tx: 0, tz: 0.3, want: null, pitch: +(Q.get('pitch') || 58) };
+
+function randomGear() {
+  const q = () => Math.floor(Math.random() * 6);
+  const pick = (a) => a[Math.floor(Math.random() * a.length)];
+  const e = {};
+  const w = pick(['sword', 'axe', 'spear', 'bow', 'dagger', 'staff']);
+  e.weapon = { key: w, type: w, quality: q(), slot: 'weapon' };
+  if (['sword', 'axe', 'dagger'].includes(w) && Math.random() < 0.5) { const o = pick(['buckler', 'kite', 'tower']); e.offhand = { key: o, type: o, quality: q(), slot: 'offhand' }; }
+  for (const [slot, piece, p] of [['head', 'helm', 0.45], ['body', 'mail', 0.6], ['feet', 'boots', 0.5]]) {
+    if (Math.random() < p) { const t = pick(['light', 'medium', 'heavy']); e[slot] = { key: t + '_' + piece, type: t, quality: q(), slot }; }
+  }
+  return e;
+}
+
+function makeChar(race) {
+  const ch = LPC.generate(race || null);
+  ch.id = Math.floor(Math.random() * 1e9);
+  ch.temper = { nerve: Math.round(8 + Math.random() * 84) };
+  if (document.getElementById('gear').checked && Q.get('gear') !== '0') ch.equipment = randomGear();
+  return ch;
+}
+
+function short(id) { return id ? id.split('/').pop().replace(/^(hair|heads|torso_clothes|legs|feet)_/, '') : '-'; }
+
+function roll() {
+  for (const f of figs) { scene.remove(f.fig.group); scene.remove(f.shadow); f.fig.dispose(); }
+  figs = [];
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  const n = +(Q.get('n') || 12), cols = Math.min(4, n), race = document.getElementById('race').value || Q.get('race') || '';
+  for (let i = 0; i < n; i++) {
+    const ch = makeChar(race);
+    const fig = Figure3D.create(ch, {});
+    const lineup = Q.get('layout') === 'row';
+    const col = lineup ? i : i % cols, row = lineup ? 0 : Math.floor(i / cols);
+    const home = lineup ? { x: (i - (n - 1) / 2) * 0.95, z: 0 } : { x: (col - (cols - 1) / 2) * 1.8, z: (row - (Math.ceil(n / cols) - 1) / 2) * 2.0 };
+    fig.group.position.set(home.x, 0, home.z);
+    scene.add(fig.group);
+    const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.32 * fig.height, 20).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }));
+    shadow.position.set(home.x, 0.01, home.z);
+    scene.add(shadow);
+    const entry = { ch, fig, home, shadow, i, phase: Math.random() * Math.PI * 2, nextStrike: 1 + Math.random() * 2, nextHit: 2 + Math.random() * 3, fell: false };
+    fig.onEmit((e) => onEmit(entry, e));
+    figs.push(entry);
+    // card with the LPC sprite
+    const card = document.createElement('div');
+    card.className = 'card';
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+    const sel = (re) => (ch.selections.find(s => re.test(s.id)) || {}).id;
+    const eq = ch.equipment ? Object.values(ch.equipment).map(x => x.key + '+' + x.quality).join(' ') : '';
+    card.innerHTML = `<div style="min-width:0"><b>#${i + 1} ${ch.race} · ${ch.bodyType}</b><span>${short(sel(/^head\/heads/))} · ${short(sel(/^hair\/(?!beards|mustaches)/))}<br>${short(sel(/^torso\/shirts/))} · ${short(sel(/^legs\//))} · ${short(sel(/^feet\//))}<br>${eq}</span></div>`;
+    card.prepend(cv);
+    card.onclick = () => { for (const c of list.children) c.classList.remove('sel'); card.classList.add('sel'); cam.want = { x: home.x, z: home.z, d: 3.2 }; };
+    list.append(card);
+    LPC.buildLayers(ch).then(layers => LPC.drawFrame(cv.getContext('2d'), layers, LPC.ROW_DOWN, 0));
+  }
+  if (Q.get('focus')) { const f = figs[+Q.get('focus') - 1]; if (f) cam.want = { x: f.home.x, z: f.home.z, d: 3.2 }; }
+}
+
+function onEmit(entry, e) {
+  const target = new THREE.Vector3(entry.home.x, 0.7, entry.home.z + 1.6);
+  if (e.type === 'arrow' || e.type === 'orb') fx.shoot(e.type, e.from, target, { onLand: () => fx.burst(target, e.type === 'orb' ? 'magic' : 'hit') });
+  else if (e.type === 'swing') fx.burst(target.clone().setY(0.6).setZ(entry.home.z + 0.55), 'hit');
+  else if (e.type === 'sparks') fx.burst(e.from, 'spark');
+  else if (e.type === 'thud') fx.burst(e.from.clone().setY(0.05), 'dust');
+}
+
+let shadowTex;
+function start() {
+  const cv = document.getElementById('c');
+  renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color('#bcd3d6');
+  scene.fog = new THREE.Fog('#bcd3d6', 18, 45);
+  camera = new THREE.PerspectiveCamera(30, 1, 0.3, 200);
+  scene.add(new THREE.HemisphereLight('#d6ecff', '#6e5a3a', 1.15));
+  const sun = new THREE.DirectionalLight('#fff0d2', 2.6);
+  sun.position.set(-6, 12, 8);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 10, bottom: -10 });
+  scene.add(sun);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: '#6f9c45' }));
+  ground.receiveShadow = true;
+  scene.add(ground);
+  const c2 = document.createElement('canvas'); c2.width = c2.height = 64;
+  const g = c2.getContext('2d'), grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(0,0,0,.5)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  shadowTex = new THREE.CanvasTexture(c2);
+  fx = Figure3D.effects(scene);
+
+  const bar = document.getElementById('modes');
+  for (const m of MODES) {
+    const b = document.createElement('button');
+    b.textContent = m; b.dataset.mode = m;
+    b.onclick = () => setMode(m);
+    bar.append(b);
+  }
+  const jobSel = document.getElementById('job');
+  for (const j of JOBS) { const o = document.createElement('option'); o.value = o.textContent = j; jobSel.append(o); }
+  if (Q.get('job')) jobSel.value = Q.get('job');
+  if (Q.get('energy')) document.getElementById('energy').value = Q.get('energy');
+  if (Q.get('hurt')) document.getElementById('hurt').checked = Q.get('hurt') === '1';
+  const raceSel = document.getElementById('race');
+  for (const r of LPC.activeRaces()) { const o = document.createElement('option'); o.value = o.textContent = r; raceSel.append(o); }
+  if (Q.get('race')) raceSel.value = Q.get('race');
+  raceSel.onchange = roll;
+  document.getElementById('reroll').onclick = roll;
+  document.getElementById('gear').onchange = roll;
+  if (Q.get('zoom')) cam.d = 15 / +Q.get('zoom');
+
+  let drag = null;
+  cv.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, yaw: cam.yaw }; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener('pointermove', (e) => { if (drag) cam.yaw = drag.yaw + (e.clientX - drag.x) * 0.006; });
+  cv.addEventListener('pointerup', () => { drag = null; });
+  cv.addEventListener('wheel', (e) => { e.preventDefault(); cam.want = null; cam.d = Math.max(1.6, Math.min(30, cam.d * (e.deltaY > 0 ? 1.12 : 0.89))); }, { passive: false });
+
+  setMode(mode);
+  roll();
+  requestAnimationFrame(frame);
+}
+
+function setMode(m) {
+  mode = m;
+  for (const b of document.querySelectorAll('#modes button')) b.classList.toggle('on', b.dataset.mode === m);
+  if (m === 'fall' || figs.some(f => f.fell)) { if (figs.some(f => f.fell)) roll(); }
+}
+
+function frame(now) {
+  const dt = Math.min(0.1, last ? (now - last) / 1000 : 0.016);
+  last = now;
+  clock += dt;
+  const W = renderer.domElement.clientWidth, H = renderer.domElement.clientHeight;
+  if (renderer.domElement.width !== Math.floor(W * renderer.getPixelRatio())) { renderer.setSize(W, H, false); camera.aspect = W / H; camera.updateProjectionMatrix(); }
+  if (cam.want) { const k = 1 - Math.exp(-dt * 5); cam.tx += (cam.want.x - cam.tx) * k; cam.tz += (cam.want.z - cam.tz) * k; cam.d += (cam.want.d - cam.d) * k; }
+  const pitch = cam.pitch * Math.PI / 180, ty = cam.d < 5 ? 0.55 : 0.3;
+  camera.position.set(cam.tx + Math.sin(cam.yaw) * Math.cos(pitch) * cam.d, ty + Math.sin(pitch) * cam.d, cam.tz + Math.cos(cam.yaw) * Math.cos(pitch) * cam.d);
+  camera.lookAt(cam.tx, ty, cam.tz);
+
+  const energy = +document.getElementById('energy').value, hurt = document.getElementById('hurt').checked;
+  const jobSel = document.getElementById('job').value;
+  for (const f of figs) {
+    let x = f.home.x, z = f.home.z, m = 'idle', face = null, props = 'none', job = null;
+    if (mode === 'walk' || mode === 'run') {
+      const r = mode === 'run' ? 0.75 : 0.55, v = mode === 'run' ? 2.6 : 1.0;
+      f.phase += dt * v / r;
+      x += Math.cos(f.phase) * r; z += Math.sin(f.phase) * r;
+      props = 'gear';
+    } else if (mode === 'work') {
+      m = 'work'; props = 'tool';
+      job = jobSel === 'mixed' ? JOBS[1 + (f.i % (JOBS.length - 1))] : jobSel;
+    } else if (mode === 'fight') {
+      m = 'fight'; props = 'gear'; face = { x, z: z + 2 };
+      if (clock > f.nextStrike) { f.fig.trigger('strike', { at: new THREE.Vector3(x, 0.7, z + 1.6) }); f.nextStrike = clock + 1.4 + Math.random() * 1.8; }
+      if (clock > f.nextHit) { const r = Math.random(); f.fig.trigger(r < 0.6 ? 'hit' : r < 0.8 ? 'dodge' : 'block', { from: { x, z: z + 2 } }); if (r < 0.6) fx.burst(new THREE.Vector3(x, f.fig.height * 0.7, z + 0.1), 'hit'); f.nextHit = clock + 2.5 + Math.random() * 3; }
+    } else if (mode === 'talk') {
+      m = 'talk';
+      const partner = figs[f.i ^ 1];
+      if (partner) face = { x: partner.home.x, z: partner.home.z };
+    } else if (mode === 'sit') m = 'sit';
+    else if (mode === 'fall') { m = 'fight'; props = 'gear'; if (!f.fell && clock > f.nextHit) { f.fell = true; f.fig.trigger('fall', {}); } }
+    f.fig.update(dt, { x, y: 0, z, mode: m, face, props, job, energy, hurt });
+    f.shadow.position.set(x, 0.01, z);
+  }
+  fx.update(dt);
+  Figure3D.viewport(renderer.domElement.width, renderer.domElement.height, 1.25 * renderer.getPixelRatio());
+  renderer.render(scene, camera);
+  if (!document.title.endsWith('·')) document.title = '3D figures ·';
+  requestAnimationFrame(frame);
+}
+
+LPC.loadCatalog().then(() => {
+  const go = () => window.THREE ? start() : setTimeout(go, 30);
+  go();
+});
+</script>
+<script>import('./vendor/three.module.min.js').then(m => { window.THREE = m; }, () => { window.THREE = null; });</script>
+</body>
+</html>
