@@ -282,16 +282,47 @@ function addLodging(type) {
   if (!gate.ok) return gate;
   const res = Lodging.build(state, type);
   if (!res.ok) return res;
-  logLine(`${LODGINGS[type].icon} Built a ${LODGINGS[type].label.toLowerCase()} — ${LODGINGS[type].beds} beds`);
+  logLine(`🚧 Ordered a ${LODGINGS[type].label.toLowerCase()}: site open, ${LODGINGS[type].work} builder-ticks of work, ${LODGINGS[type].beds} beds when done`);
   save(); renderAll();
   return res;
+}
+/** What cancelling a site gives back: the cost times the fraction of the work not yet done, floored. */
+function siteRefund(inst) {
+  const left = 1 - Math.min(1, inst.site.done / inst.site.work);
+  const out = {};
+  for (const [k, v] of Object.entries(LODGINGS[inst.type].cost)) { const n = Math.floor(v * left); if (n > 0) out[k] = n; }
+  return out;
 }
 function removeLodging(id) {
   const inst = Lodging.find(state, id);
   if (!inst) return;
-  Lodging.demolish(state, id);
-  logLine(`🧹 Pulled down a ${LODGINGS[inst.type].label.toLowerCase()}`);
+  if (inst.site) {
+    const back = siteRefund(inst);
+    for (const [k, v] of Object.entries(back)) state[k] = (state[k] || 0) + v;
+    Lodging.demolish(state, id);
+    logLine(`🧹 Cancelled a ${LODGINGS[inst.type].label.toLowerCase()} site at ${Math.round(100 * inst.site.done / inst.site.work)}%; refunded ${Econ.costText(back) || 'nothing'}`);
+  } else {
+    Lodging.demolish(state, id);
+    logLine(`🧹 Pulled down a ${LODGINGS[inst.type].label.toLowerCase()}`);
+  }
   save(); renderAll();
+}
+
+const AUTO_HOUSE_EVERY = 6;   // ticks between the town checking whether to start a house (1 minute)
+
+/** Construction, after the rota: progress the sites, then let the town start one if people sleep outside. */
+const spareJob = (k) => !!JOBS[k] && !JOBS[k].building && JOBS[k].kind !== 'train';   // unbounded posts: maintenance
+function tickConstruction() {
+  for (const e of Lodging.construct(state, { spareJob, release: (c) => setJob(c.id, null) })) {
+    const d = LODGINGS[e.inst.type];
+    logLine(`${d.icon} ${d.label} finished: ${d.beds} beds open. Built by ${e.crew.map(c => c.name).join(', ') || 'nobody this tick'}`);
+  }
+  if (state.ticks % AUTO_HOUSE_EVERY) return;
+  const pick = Lodging.autoPlan(state, (t) => canBuildLodging(t).ok);
+  if (!pick) return;
+  const d = LODGINGS[pick.type];
+  const res = Lodging.build(state, pick.type, { by: 'town' });
+  if (res.ok) logLine(`🔨 The town started a ${d.label.toLowerCase()}: ${pick.short} sleeping outside beyond the beds already under construction; paid ${Econ.costText(d.cost)}, each at most half the stock`);
 }
 const housed = (c) => Lodging.housed(state, c);
 function slotsFor(job) { const b = JOBS[job].building; return b ? tierOf(b).slots : Infinity; }
@@ -390,6 +421,7 @@ function readCompany() {
   for (const c of state.characters) {
     if (c.mission) continue;
     if (c.job) (byJob[c.job] = byJob[c.job] || []).push(c);
+    else if (c.building) (byJob['build:' + c.building] = byJob['build:' + c.building] || []).push(c);
     const bed = Lodging.bedOf(state, c);
     if (bed) (byBed[bed.id] = byBed[bed.id] || []).push(c);
   }
@@ -443,7 +475,7 @@ function tick(times = 1) {
       // of the rotation, and somebody on a mission is living it out there instead.
       if (!c.mission) {
         const before = Condition.isSpent(c);
-        Condition.tick(c, { job: job ? job.kind : null, housed: housed(c), restMult: restFor(c), lodging: Lodging.moraleFor(state, c), fed: fedTown, social: Bonds.company(state, c, companyFor(c)) });
+        Condition.tick(c, { job: job ? job.kind : (c.building ? 'build' : null), housed: housed(c), restMult: restFor(c), lodging: Lodging.moraleFor(state, c), fed: fedTown, social: Bonds.company(state, c, companyFor(c)) });
         // Innate abilities get the town tick too. Without this a facet can only ever fire while
         // somebody is being hit, which makes every generated ability a combat ability no matter what
         // the registry describes — the engine would be able to read a character's morale and never
@@ -505,6 +537,7 @@ function tick(times = 1) {
         state.shiftTally = { off: 0, on: 0, since: 0 };
       }
     }
+    tickConstruction();
     for (const run of Missions.tick(state, { fed: fedTown })) settleMission(run);
     const sup = Outfit.supply(state, addItem);
     for (const e of sup.equipped) logLine(`🎽 ${e.c.name} took the ${e.item.name}${e.old ? ` (returned ${e.old.name})` : ''}`);
@@ -708,7 +741,7 @@ function rotateWorkers() {
   //    table happens to be written in. The button is pressed once an hour and the rota runs every
   //    tick, so leaving this on declaration order meant the mine outbid the kitchen for every
   //    spare pair of hands about six seconds after staffing had decided otherwise.
-  const spare = () => state.characters.filter(c => !c.job && !c.mission && !(c.injured > 0) && Condition.readyToReturn(c));
+  const spare = () => state.characters.filter(c => !c.job && !c.building && !c.mission && !(c.injured > 0) && Condition.readyToReturn(c));
   const needed = typeof Crew !== 'undefined' ? Crew.demands(state, jobApi()).map(n => n.job) : [];
   for (const k of [...new Set([...needed, ...Object.keys(JOBS)])]) {
     const j = JOBS[k];
@@ -1540,11 +1573,13 @@ function lodgingYard() {
     card.innerHTML = `<h3>${d.icon} ${d.label}${have ? ` <span class="sub">×${have}</span>` : ''}</h3>
       <div class="sub">${d.desc}</div>
       <div class="sub">${d.beds} beds · rest ×${d.rest.toFixed(2)} · morale ${d.morale >= 0 ? '+' : ''}${d.morale} · ${d.plots} plot${d.plots === 1 ? '' : 's'}</div>
-      <div class="upgrade"><button ${gate.ok ? '' : 'disabled'} title="${gate.why || ''}">Build</button><div class="sub">${Econ.costText(d.cost)}</div>${gate.ok ? '' : `<div class="sub warn">${gate.why}</div>`}</div>`;
+      <div class="sub">${d.work} builder-ticks to build</div>
+      <div class="upgrade"><button ${gate.ok ? '' : 'disabled'} title="${gate.why || ''}">Order</button><div class="sub">${Econ.costText(d.cost)}</div>${gate.ok ? '' : `<div class="sub warn">${gate.why}</div>`}</div>`;
     card.querySelector('button').addEventListener('click', () => addLodging(type));
     shop.append(card);
   }
   box.append(shop);
+  box.append(autoHouseBox());
 
   if (!sum.buildings.length) return box;
 
@@ -1568,7 +1603,7 @@ function lodgingYard() {
 
   const yardGrid = document.createElement('div');
   yardGrid.className = 'grid';
-  for (const b of sum.buildings) yardGrid.append(lodgingCard(b));
+  for (const b of sum.buildings) yardGrid.append(b.site ? siteCard(b) : lodgingCard(b));
   box.append(yardGrid);
 
   if (sum.outside.length) {
@@ -1579,6 +1614,52 @@ function lodgingYard() {
     box.append(out);
   }
   return box;
+}
+
+/**
+ * The town's own housing policy. When people sleep outside, it starts the cheapest checked type
+ * whose beds cover them, if each resource in that cost is at most half the stock.
+ */
+function autoHouseBox() {
+  const pol = Lodging.autoPolicy(state);
+  const div = document.createElement('div');
+  div.className = 'sub';
+  div.style.margin = '8px 0 0';
+  const short = Lodging.plan(state).outside.length - Lodging.pendingBeds(state);
+  div.innerHTML = `<label><input type="checkbox" id="auto-house" ${pol.on ? 'checked' : ''}> <b>The town builds on its own</b></label>
+    — every ${AUTO_HOUSE_EVERY} ticks: if (sleeping outside − beds under construction) &gt; 0, start the cheapest checked type that covers it, paid only when each resource in its cost is at most half the stock; one town-started site at a time. Now: ${Math.max(0, short)} uncovered.
+    <div class="filters" style="margin-top:4px">${Object.entries(LODGINGS).map(([t, d]) =>
+      `<label><input type="checkbox" data-auto-type="${t}" ${pol.types.includes(t) ? 'checked' : ''} ${pol.on ? '' : 'disabled'}> ${d.icon} ${d.label}</label>`).join(' ')}</div>`;
+  div.querySelector('#auto-house').addEventListener('change', (e) => { pol.on = e.target.checked; save(); renderTown(); });
+  for (const box of div.querySelectorAll('[data-auto-type]')) {
+    box.addEventListener('change', (e) => {
+      const t = e.target.dataset.autoType;
+      pol.types = e.target.checked ? [...new Set([...pol.types, t])] : pol.types.filter(x => x !== t);
+      save();
+    });
+  }
+  return div;
+}
+
+/** A site's card: progress, who is on it, and the arithmetic of how long it has left. */
+function siteCard(b) {
+  const card = document.createElement('div');
+  card.className = 'bcard';
+  const st = b.site;
+  const left = st.ticksLeft == null ? 'no builders: waits for someone off shift and rested'
+    : `${st.ticksLeft} ticks left at this rate (${Math.ceil(st.ticksLeft * TICK_MS / 60000)} min)`;
+  card.innerHTML = `<h3>🚧 ${b.icon} ${b.label} <span class="sub">${Math.round(st.frac * 100)}% · ${st.by === 'town' ? 'started by the town' : 'ordered'}</span></h3>
+    <div style="height:6px;background:#333;border-radius:3px;overflow:hidden;margin:4px 0"><i style="display:block;height:100%;width:${(st.frac * 100).toFixed(1)}%;background:#c9963f"></i></div>
+    <div class="sub">${st.done.toFixed(1)} / ${st.work} builder-ticks · ${st.builders.length}/${st.cap} builders · ${st.rate.toFixed(2)} per tick · ${left}</div>
+    <div class="sub">${st.builders.length ? st.builders.map(c => `${c.name} ×${Lodging.builderRate(c).toFixed(2)}`).join(', ') : ''}</div>
+    <div class="sub">Builder rate = stamina × morale work multiplier × (0.5 + STR / 20). Builders come off maintenance or from anyone with no post (rested), never from a seated post; each one costs their maintenance gems while building, and stops when spent. ${b.beds} beds when done.</div>`;
+  const cancel = document.createElement('button');
+  cancel.className = 'ghost';
+  const back = siteRefund(Lodging.find(state, b.id));
+  cancel.textContent = `Cancel (refund ${Econ.costText(back) || 'nothing'})`;
+  cancel.addEventListener('click', () => removeLodging(b.id));
+  card.append(cancel);
+  return card;
 }
 
 /**

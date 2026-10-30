@@ -1,23 +1,20 @@
 // The town, as ground you can walk on. Browser: window.TownMap. Node: module.exports.
 //
-// Everything the town already has is a number in a panel: a farm at tier 3, four tents, a
-// bunkhouse, eleven people. This turns that into a PLACE — a road, plots either side of it, a
-// square at one end and the gate to the field at the other — so that "Kess is at the smithy"
-// is somewhere she can be rather than a row in a table.
+// Turns the town's buildings into a PLACE, so "Kess is at the smithy" is somewhere she can be
+// rather than a row in a table.
 //
-// The layout is deterministic. There is no randomness in this file, so the same buildings always
-// produce the same town and the player sees the same place each time. It grows when
-// you build — a Field becomes Terraces and its footprint doubles, a new lodging takes the next
-// plot along the south side — and it is rebuilt only when `signature` changes, so the map is
-// stable for as long as the town is.
+// Where things stand comes from baselayout.js: a procedural layout seeded per save, with the
+// square at the centre, the crystal north of it, workshops round the east, south and west,
+// homes round the crystal, and one road out south to the gate. Placements are stored in
+// state.base, so a new building never moves an old one. This file rasterises that layout onto a
+// mapgen.js grid (tile = layout position + map.offset) so the distance fields and the pathing in
+// townlife.js work on it as they do on a mission map, and keeps the layout on map.layout for the
+// 3D view.
 //
-// Shape. One road, west to east. Work on the north side, beds on the south side, so no bed is
-// next to a workshop. The SQUARE is the west end of the road and is where anybody with nowhere
-// to be ends up. The GATE is the east end, and is the only way out: every mission in the game
-// leaves through it.
-//
-// Tiles are mapgen.js's codes so the tile palette, the distance fields and the pathing all work
-// on this map exactly as they do on a mission map. Nothing here knows how to draw.
+// Raster rules: a finished building is a ring of WALL tiles round FLOOR, with one DOOR on its
+// square-facing side. A construction site is open FLOOR, so builders can stand anywhere on it.
+// Roads are ROAD. The crystal and the fountain are WALL. Everything else is FLOOR.
+// The map is rebuilt only when `signature` changes.
 
 (() => {
 const MG = (typeof Mapgen !== 'undefined') ? Mapgen : require('./mapgen.js');
@@ -25,11 +22,10 @@ const E = () => (typeof Econ !== 'undefined') ? Econ : require('./economy.js');
 const LO = () => (typeof Lodging !== 'undefined') ? Lodging : (typeof require !== 'undefined' ? require('./lodging.js') : null);
 const T = MG.T;
 
-const GAP = 2;             // tiles between neighbouring plots
-const MARGIN = 2;          // tiles of ground inside the palisade
-const LANE = 3;            // how far a building sits off the road
-const SQUARE_R = 5;        // the plaza at the west end
-const FORECOURT = 7;       // ground in front of the gate
+const BL = () => (typeof BaseLayout !== 'undefined') ? BaseLayout : require('./baselayout.js');
+const SQUARE_R = 5;
+const FOUNTAIN_R = 1.6;    // tiles round the square's centre nobody stands on
+const EDGE = 6;            // tiles of open ground past the layout's extent
 
 // Footprints. A building's plot grows with its tier, which is the only way the town ever looks
 // bigger: an Abyssal Mine is a hole you can see from the road and a Quarry is a scrape.
@@ -51,27 +47,28 @@ const BED_SIZE = {
  */
 function signature(state) {
   const lo = LO();
-  const beds = lo ? lo.ensure(state).map(b => b.type + b.id).sort().join(',') : '';
-  return [state.town, Object.entries(state.buildings).map(([k, v]) => k + v).sort().join(','), beds].join('|');
+  const beds = lo ? lo.ensure(state).map(b => b.type + b.id + (b.site ? '~' : '')).sort().join(',') : '';
+  return [state.base ? state.base.seed : 0, state.town, Object.entries(state.buildings).map(([k, v]) => k + v).sort().join(','), beds].join('|');
 }
 
-/** What goes on the north side of the road, west to east, in a fixed order. */
+/** Every workshop, in a fixed order (the order they are first placed in on a new save). */
 function workPlots(state) {
   const econ = E();
   const ORDER = ['farm', 'mine', 'garden', 'kitchen', 'smithy', 'lab', 'training'];
   return ORDER.filter(k => econ.BUILDINGS[k]).map(k => {
     const def = econ.BUILDINGS[k];
     const tier = state.buildings[k] || 0;
-    return { key: k, kind: 'work', job: def.job || null, icon: def.icon, label: def.tiers[tier].name, ...workSize(tier) };
+    const top = workSize(def.tiers.length - 1);
+    return { key: k, kind: 'work', job: def.job || null, icon: def.icon, label: def.tiers[tier].name, tier, ...workSize(tier), rw: top.w, rh: top.h };
   });
 }
 
-/** And the south side: everywhere anybody sleeps, then the altar at the far end. */
+/** Everywhere anybody sleeps, in the order it was built, then the altar. */
 function bedPlots(state) {
   const lo = LO(), econ = E();
   const out = (lo ? lo.ensure(state) : []).map(b => {
     const def = econ.LODGINGS[b.type] || econ.LODGINGS.tent;
-    return { key: 'bed:' + b.id, bedId: b.id, kind: 'bed', icon: def.icon, label: def.label, ...(BED_SIZE[b.type] || BED_SIZE.tent) };
+    return { key: 'bed:' + b.id, bedId: b.id, kind: 'bed', type: b.type, site: !!b.site, icon: def.icon, label: def.label, ...(BED_SIZE[b.type] || BED_SIZE.tent) };
   });
   const altarTier = state.buildings.altar || 0;
   out.push({ key: 'altar', kind: 'altar', icon: '⚱️', label: econ.BUILDINGS.altar.tiers[altarTier].name, w: 4, h: 4 });
@@ -79,132 +76,101 @@ function bedPlots(state) {
 }
 
 /**
- * Split a side's plots into a front row and a back row. A town of one enormously long street is
- * a town nobody can see; two streets and a back lane is a town. Front row first, so the things
- * you look at most are on the main street.
- */
-function wrap(plots, maxW) {
-  const front = [], back = [];
-  let w = 0;
-  for (const p of plots) {
-    if (w + p.w > maxW && front.length) back.push(p);
-    else { front.push(p); w += p.w + GAP; }
-  }
-  return { front, back };
-}
-
-/** Lay a row of plots out left to right from `x0`, and say how wide it ended up. */
-function shelf(plots, x0) {
-  let x = x0;
-  for (const p of plots) { p.x = x; x += p.w + GAP; }
-  return Math.max(x0, x - GAP);
-}
-
-const rowH = (plots) => plots.length ? Math.max(...plots.map(p => p.h)) : 0;
-
-/**
  * Build the town. Returns a mapgen-shaped grid plus the plots on it, so field.js's distance
  * fields, fieldview's palette and anything else that reads a map all work unchanged.
  */
-const WRAP = 40;           // tiles of frontage before a side starts a back row
-
 function build(state) {
-  const north = wrap(workPlots(state), WRAP);
-  const south = wrap(bedPlots(state), WRAP);
-
-  // width: whichever row needs the most frontage, plus a square at one end and the gate's
-  // forecourt at the other
-  const x0 = MARGIN + SQUARE_R * 2 + GAP;
-  const rightEdge = Math.max(x0 + 16,
-    ...[north.front, north.back, south.front, south.back].map(r => shelf(r, x0)));
-  const w = rightEdge + FORECOURT + MARGIN + 1;
-
-  // Four rows and three streets. Front rows face the main street; back rows face a lane of their
-  // own. Every door opens onto a road, so the layout does not read as a warehouse yard, and the
-  // roads are where everybody walks.
-  const nbH = rowH(north.back), sbH = rowH(south.back);
-  const yNorthLane = MARGIN + nbH + 1;
-  const yRoad = yNorthLane + (nbH ? 2 : 0) + LANE + rowH(north.front);
-  const ySouthLane = yRoad + LANE + rowH(south.front) + (sbH ? 2 : 0);
-  const h = ySouthLane + (sbH ? LANE + sbH : 0) + MARGIN + 1;
-
+  const lay = BL().layout(state, [...workPlots(state), ...bedPlots(state)]);
+  const O = Math.ceil(lay.extent + EDGE);
+  const w = 2 * O + 1, h = 2 * O + 1;
   const g = MG.grid(w, h, T.FLOOR);
-  // the palisade, and the ground inside it
-  for (let x = 0; x < w; x++) { g.set(x, 0, T.WALL); g.set(x, h - 1, T.WALL); }
-  for (let y = 0; y < h; y++) { g.set(0, y, T.WALL); g.set(w - 1, y, T.WALL); }
+  const tileOf = (x, z) => ({ x: Math.floor(x + O), y: Math.floor(z + O) });
+  const centreOf = (tx, ty) => ({ x: tx - O + 0.5, z: ty - O + 0.5 });
 
-  const street = (y, wide) => { for (let x = 1; x < w - 1; x++) for (let d = wide ? -1 : 0; d <= (wide ? 1 : 0); d++) g.set(x, y + d, T.ROAD); };
-  street(yRoad, true);
-  if (nbH) street(yNorthLane, false);
-  if (sbH) street(ySouthLane, false);
-
-  const zones = {};
-  const plots = {};
-  /** Put a plot down with its door facing `lane`, and run a path from the door to it. */
-  const put = (p, top, lane) => {
-    p.y = top;
-    for (let y = p.y; y < p.y + p.h; y++) for (let x = p.x; x < p.x + p.w; x++) {
-      const edge = y === p.y || y === p.y + p.h - 1 || x === p.x || x === p.x + p.w - 1;
-      g.set(x, y, edge ? T.WALL : T.FLOOR);
+  // roads: every tile whose centre is within half a road's width of the polyline
+  const stamp = (pts, half) => {
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+      const len = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.ceil(len * 4));
+      for (let k = 0; k <= n; k++) {
+        const x = ax + (bx - ax) * k / n, z = az + (bz - az) * k / n;
+        for (let ty = Math.floor(z - half + O); ty <= Math.floor(z + half + O); ty++)
+          for (let tx = Math.floor(x - half + O); tx <= Math.floor(x + half + O); tx++) {
+            const c = centreOf(tx, ty);
+            if (Math.hypot(c.x - x, c.z - z) <= half) g.set(tx, ty, T.ROAD);
+          }
+      }
     }
-    const down = lane > p.y;                        // is the street below this plot or above it
-    const dx = p.x + Math.floor(p.w / 2);
-    const dy = down ? p.y + p.h - 1 : p.y;
-    g.set(dx, dy, T.DOOR);
-    p.door = { x: dx, y: dy };
-    const step = down ? 1 : -1;
-    for (let y = dy + step; down ? y < lane : y > lane; y += step) g.set(dx, y, T.ROAD);
-    // where somebody stands when they are here: the inside of the building, or the doorstep for
-    // anything too small to have one
-    p.inside = [];
-    for (let y = p.y + 1; y < p.y + p.h - 1; y++) for (let x = p.x + 1; x < p.x + p.w - 1; x++) p.inside.push({ x, y });
-    if (!p.inside.length) p.inside.push({ x: dx, y: dy + step });
-    p.at = { x: dx, y: dy + step };                 // the tile just outside the door
-    plots[p.key] = p;
-    zones[p.key] = { x: p.x + p.w / 2, y: p.y + p.h / 2, r: Math.max(p.w, p.h) / 2 };
   };
+  for (const r of lay.roads) stamp(r.pts, r.width / 2);
+  const disc = (cx, cz, rad, code) => {
+    for (let ty = Math.floor(cz - rad + O); ty <= Math.ceil(cz + rad + O); ty++)
+      for (let tx = Math.floor(cx - rad + O); tx <= Math.ceil(cx + rad + O); tx++) {
+        const c = centreOf(tx, ty);
+        if (Math.hypot(c.x - cx, c.z - cz) <= rad) g.set(tx, ty, code);
+      }
+  };
+  disc(0, 0, SQUARE_R, T.ROAD);
+  disc(0, 0, FOUNTAIN_R, T.WALL);
+  disc(lay.crystal.x, lay.crystal.z, 1.6, T.WALL);
 
-  for (const p of north.front) put(p, yRoad - LANE - p.h, yRoad - 1);
-  for (const p of north.back) put(p, yNorthLane - LANE - p.h + 1, yNorthLane);
-  for (const p of south.front) put(p, yRoad + LANE, yRoad + 1);
-  for (const p of south.back) put(p, ySouthLane + LANE, ySouthLane);
+  const plots = {}, zones = {};
+  for (const s of lay.structures) {
+    const hw = s.w / 2, hd = s.h / 2, rad = s.r + 1;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const inside = [];
+    for (let ty = Math.floor(s.z - rad + O); ty <= Math.ceil(s.z + rad + O); ty++)
+      for (let tx = Math.floor(s.x - rad + O); tx <= Math.ceil(s.x + rad + O); tx++) {
+        const c = centreOf(tx, ty), l = BL().toLocal(s, c.x, c.z);
+        if (Math.abs(l.u) > hw || Math.abs(l.v) > hd) continue;
+        x0 = Math.min(x0, tx); y0 = Math.min(y0, ty); x1 = Math.max(x1, tx); y1 = Math.max(y1, ty);
+        const edge = Math.abs(l.u) > hw - 1 || Math.abs(l.v) > hd - 1;
+        if (edge && !s.site) g.set(tx, ty, T.WALL);
+        else { g.set(tx, ty, T.FLOOR); inside.push({ x: tx, y: ty }); }
+      }
+    const dw = BL().toWorld(s, 0, hd - 0.5), dt = tileOf(dw.x, dw.z);
+    if (!s.site) g.set(dt.x, dt.y, T.DOOR);
+    const iw = BL().toWorld(s, 0, hd - 1.5), it = tileOf(iw.x, iw.z);
+    if (!s.site && hd > 1.5) g.set(it.x, it.y, T.FLOOR);
+    const at = tileOf(s.step.x, s.step.z);
+    if (!g.passable(at.x, at.y)) g.set(at.x, at.y, T.ROAD);
+    if (!inside.length) inside.push(at);
+    const { x: _x, z: _z, ...rest } = s;
+    plots[s.key] = {
+      ...rest, wx: s.x, wz: s.z,
+      x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1,
+      inside, at, door: dt,
+    };
+    zones[s.key] = { x: s.x + O, y: s.z + O, r: s.r };
+  }
 
-  // THE SQUARE. Open ground at the west end of the road, and the one place in the town that is
-  // nobody's workplace and nobody's bed — which is exactly why anybody with a day off is in it.
-  const square = { x: MARGIN + SQUARE_R, y: yRoad, r: SQUARE_R };
-  for (let y = square.y - SQUARE_R; y <= square.y + SQUARE_R; y++) {
-    for (let x = square.x - SQUARE_R; x <= square.x + SQUARE_R; x++) {
-      if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
-      if ((x - square.x) ** 2 + (y - square.y) ** 2 <= SQUARE_R * SQUARE_R) g.set(x, y, T.ROAD);
-    }
+  // THE SQUARE: open ground round the fountain, where anybody with nowhere to be ends up
+  const sqAt = tileOf(0, SQUARE_R - 1.5);
+  const sqIn = [];
+  for (let ty = -SQUARE_R; ty <= SQUARE_R; ty++) for (let tx = -SQUARE_R; tx <= SQUARE_R; tx++) {
+    const d = Math.hypot(tx + 0.5, ty + 0.5);
+    if (d <= SQUARE_R - 1 && d > FOUNTAIN_R + 0.6) sqIn.push({ x: tx + O, y: ty + O });
   }
   plots.square = {
     key: 'square', kind: 'square', icon: '⛲', label: 'The square',
-    x: square.x - SQUARE_R, y: square.y - SQUARE_R, w: SQUARE_R * 2, h: SQUARE_R * 2,
-    at: { x: square.x, y: square.y }, door: { x: square.x, y: square.y },
-    inside: (() => {
-      const out = [];
-      for (let y = square.y - SQUARE_R + 1; y <= square.y + SQUARE_R - 1; y++)
-        for (let x = square.x - SQUARE_R + 1; x <= square.x + SQUARE_R - 1; x++)
-          if ((x - square.x) ** 2 + (y - square.y) ** 2 <= (SQUARE_R - 1) ** 2) out.push({ x, y });
-      return out;
-    })(),
+    x: O - SQUARE_R, y: O - SQUARE_R, w: SQUARE_R * 2, h: SQUARE_R * 2,
+    at: sqAt, door: sqAt, inside: sqIn,
   };
 
-  // THE GATE. The east end of the road and the only way out of the town: every mission in the
-  // game leaves through this tile and every survivor comes back through it.
-  const gx = w - 1, gy = yRoad;
-  for (let dy = -1; dy <= 1; dy++) g.set(gx, gy + dy, T.GATE);
+  // THE GATE: where the road out leaves the base. Every mission leaves through it.
+  const gt = tileOf(lay.gate.x, lay.gate.z);
+  for (let dx = -1; dx <= 1; dx++) g.set(gt.x + dx, gt.y, T.GATE);
+  const gateIn = [];
+  for (let dy = -2; dy <= -1; dy++) for (let dx = -1; dx <= 1; dx++) gateIn.push({ x: gt.x + dx, y: gt.y + dy });
   plots.gate = {
     key: 'gate', kind: 'gate', icon: '🌀', label: 'The gate',
-    x: gx - 3, y: gy - 2, w: 4, h: 5,
-    at: { x: gx - 1, y: gy }, door: { x: gx, y: gy },
-    inside: [{ x: gx - 1, y: gy }, { x: gx - 2, y: gy }, { x: gx - 1, y: gy - 1 }, { x: gx - 1, y: gy + 1 }],
+    x: gt.x - 1, y: gt.y - 2, w: 3, h: 3,
+    at: { x: gt.x, y: gt.y - 1 }, door: gt, inside: gateIn,
   };
 
   return {
     w, h, tiles: g, at: g.at, passable: g.passable, opaque: g.opaque, set: g.set,
-    archetype: 'settlement', yRoad, plots, zones,
+    archetype: 'settlement', plots, zones, layout: lay, offset: O,
     sig: signature(state),
   };
 }
@@ -231,7 +197,7 @@ function plotForJob(map, job) {
   return map.plots[def.building] || null;
 }
 
-const TownMapAPI = { T, GAP, MARGIN, LANE, SQUARE_R, BED_SIZE, workSize, signature, build, fieldTo, plotAt, plotForJob, workPlots, bedPlots };
+const TownMapAPI = { T, SQUARE_R, BED_SIZE, workSize, signature, build, fieldTo, plotAt, plotForJob, workPlots, bedPlots };
 if (typeof module !== 'undefined') module.exports = TownMapAPI;
 if (typeof window !== 'undefined') window.TownMap = TownMapAPI;
 })();

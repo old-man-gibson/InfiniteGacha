@@ -19,9 +19,24 @@
 //
 // Assignment is automatic and the rules are the player's. The town does the billeting inside the
 // rules, and re-does it whenever the roster or the rules change.
+//
+// Construction. A new lodging is a SITE first: the cost is paid when it is ordered, it takes its
+// plots, and it has 0 beds until `work` builder-ticks (economy.js LODGINGS) are done on it.
+// Builders are spare hands: anyone not on a mission, not injured, not spent, and either with no
+// post (and rested: Condition.readyToReturn) or on a post the caller calls spare. game.js passes
+// the unbounded posts (no building, no seat limit: maintenance, where the rota puts everybody
+// left over), so a builder costs that post's output and a seated post (farm, mine, kitchen...)
+// is never touched. Builders build until spent, then rest. The fastest builders are taken first.
+// Each builder adds builderRate(c) = workMult x (0.5 + STR / 20) per tick.
+//
+// Who orders a site: the player (Town tab), or the town itself (autoPlan): when people sleep
+// outside beyond the beds already under construction, it starts the cheapest allowed type that
+// covers them, but only if every resource in the cost is at most half of what is in stock.
 
 (() => {
 const E = () => (typeof Econ !== 'undefined') ? Econ : require('./economy.js');
+const CO = () => (typeof Condition !== 'undefined') ? Condition : (typeof require !== 'undefined' ? require('./condition.js') : null);
+const ST = () => (typeof Stats !== 'undefined') ? Stats : (typeof require !== 'undefined' ? require('./stats.js') : null);
 const CL = () => (typeof Classes !== 'undefined') ? Classes : (typeof require !== 'undefined' ? require('./classes.js') : null);
 
 // ---------- rules ----------
@@ -86,17 +101,22 @@ function ruleText(inst, ctx = {}) {
 // ---------- the yard ----------
 const ensure = (state) => (state.lodgings = state.lodgings || []);
 const typeOf = (inst) => E().LODGINGS[inst.type];
-const bedsOf = (inst) => typeOf(inst).beds;
+const bedsOf = (inst) => inst.site ? 0 : typeOf(inst).beds;       // a site sleeps nobody
 const capacity = (state) => ensure(state).reduce((a, l) => a + bedsOf(l), 0);
 const plotsUsed = (state) => ensure(state).reduce((a, l) => a + typeOf(l).plots, 0);
 
 let seq = 0;
-function build(state, type, { free = false } = {}) {
+/**
+ * Order a lodging. It goes up as a construction site unless `instant` (save migration). `by` is
+ * 'order' for the player and 'town' for autoPlan, and is shown on the site.
+ */
+function build(state, type, { free = false, instant = false, by = 'order' } = {}) {
   const def = E().LODGINGS[type];
   if (!def) return { ok: false, why: 'no such lodging' };
   if (!free && !E().canAfford(state, def.cost)) return { ok: false, why: 'not enough resources' };
   if (!free) E().pay(state, def.cost);
   const inst = { id: 'l' + Date.now().toString(36) + (seq++), type, rules: {}, built: Date.now() };
+  if (!instant && def.work) inst.site = { work: def.work, done: 0, by, started: Date.now() };
   ensure(state).push(inst);
   state.beds = null;                                   // the billet is stale the moment the yard changes
   return { ok: true, inst };
@@ -193,6 +213,7 @@ function describe(state, inst) {
   const living = occupants(state, inst.id);
   return {
     id: inst.id, type: inst.type, label: t.label, icon: t.icon, desc: t.desc,
+    site: inst.site ? siteInfo(state, inst) : null,
     beds: t.beds, rest: t.rest, morale: t.morale, plots: t.plots,
     used: living.length, occupants: living, rules: inst.rules || {}, ruleText: ruleText(inst, ctx),
   };
@@ -208,6 +229,105 @@ function summary(state) {
   };
 }
 
+// ---------- construction ----------
+const sites = (state) => ensure(state).filter(l => l.site).sort((a, b) => a.site.started - b.site.started);
+/** Beds that will open when every site now standing is finished. */
+const pendingBeds = (state) => sites(state).reduce((a, l) => a + typeOf(l).beds, 0);
+/** Most builders one site takes: 6 per plot it covers, at least 2. */
+const crewCap = (inst) => Math.max(2, Math.round(typeOf(inst).plots * 6));
+
+/** Can this character build right now, before asking whether they are rested enough to start. */
+const offShift = (c) => !c.job && !c.mission && !(c.injured > 0);
+
+/** Construction per tick for one builder: workMult x (0.5 + STR / 20). STR 10 at full stamina and morale is 1.0. */
+function builderRate(c) {
+  const co = CO(), st = ST();
+  const str = st ? st.effective(c).base.str : 10;
+  return (co ? co.workMult(c) : 1) * (0.5 + str / 20);
+}
+
+const buildersOf = (state, id) => state.characters.filter(c => c.building === id);
+
+/** Progress of one site, and the arithmetic of how long it has left. */
+function siteInfo(state, inst) {
+  const crew = buildersOf(state, inst.id);
+  const rate = crew.reduce((a, c) => a + builderRate(c), 0);
+  const left = Math.max(0, inst.site.work - inst.site.done);
+  return {
+    by: inst.site.by, work: inst.site.work, done: inst.site.done, frac: Math.min(1, inst.site.done / inst.site.work),
+    builders: crew, rate, cap: crewCap(inst), ticksLeft: rate > 0 ? Math.ceil(left / rate) : null,
+  };
+}
+
+/**
+ * One tick of construction. Run after the rota. `spareJob(job)` says which posts a builder may be
+ * taken from; `release(c)` takes them off it. Returns events: { kind: 'done', inst, crew } when a
+ * site is finished.
+ */
+function construct(state, { spareJob = () => false, release = (c) => { c.job = null; } } = {}) {
+  const co = CO();
+  const open = sites(state);
+  const byId = new Map(open.map(l => [l.id, l]));
+  // stop: anyone whose site is gone, who has taken a post or a mission, is hurt, or is spent
+  for (const c of state.characters) {
+    if (!c.building) continue;
+    if (!byId.has(c.building) || !offShift(c) || (co && co.isSpent(c))) c.building = null;
+  }
+  if (!open.length) return [];
+  // start: spare hands go to the oldest site with room, fastest first
+  const crew = new Map(open.map(l => [l.id, buildersOf(state, l.id).length]));
+  const able = (c) => !c.building && !c.mission && !(c.injured > 0) && !(co && co.isSpent(c))
+    && (c.job ? spareJob(c.job) : (!co || co.readyToReturn(c)));
+  const hands = state.characters.filter(able).sort((a, b) => builderRate(b) - builderRate(a));
+  for (const c of hands) {
+    const site = open.find(l => crew.get(l.id) < crewCap(l));
+    if (!site) break;
+    if (c.job) release(c);
+    c.building = site.id;
+    crew.set(site.id, crew.get(site.id) + 1);
+  }
+  // work
+  const events = [];
+  for (const l of open) {
+    const team = buildersOf(state, l.id);
+    l.site.done += team.reduce((a, c) => a + builderRate(c), 0);
+    if (l.site.done < l.site.work) continue;
+    delete l.site;
+    for (const c of team) c.building = null;
+    state.beds = null;
+    events.push({ kind: 'done', inst: l, crew: team });
+  }
+  return events;
+}
+
+/** The town's own housing policy, created with its defaults on first use. */
+const AUTO_TYPES = ['tent', 'bunkhouse', 'longhouse'];
+function autoPolicy(state) {
+  if (!state.autoHouse) state.autoHouse = { on: true, types: AUTO_TYPES.slice() };
+  return state.autoHouse;
+}
+/** autoPlan's reserve rule: it pays only when every resource in the cost is at most half the stock. */
+const affordsTwice = (state, cost) => Object.entries(cost).every(([k, v]) => (state[k] || 0) >= 2 * v);
+
+/**
+ * What the town would start now, or null. `canPlace(type)` says whether there is plot room.
+ * Returns { type, short } where short = people outside minus beds already under construction.
+ */
+function autoPlan(state, canPlace = () => true) {
+  const pol = autoPolicy(state);
+  if (!pol.on) return null;
+  if (sites(state).some(l => l.site.by === 'town')) return null;      // one town-started site at a time
+  const short = plan(state).outside.length - pendingBeds(state);
+  if (short <= 0) return null;
+  const L = E().LODGINGS;
+  const ok = pol.types.filter(t => L[t] && canPlace(t) && affordsTwice(state, L[t].cost));
+  if (!ok.length) return null;
+  const total = (t) => Object.values(L[t].cost).reduce((a, v) => a + v, 0);
+  const covers = ok.filter(t => L[t].beds >= short).sort((a, b) => total(a) - total(b));
+  const type = covers[0] || ok.sort((a, b) => L[b].beds - L[a].beds)[0];
+  return { type, short };
+}
+
 /**
  * Old saves carried a single tiered lodging plus a pile of tents. Turn that into a yard that
  * houses the same people at the same standard, so nobody wakes up homeless because the town
@@ -218,9 +338,9 @@ function migrate(state) {
   ensure(state);
   const tier = (state.buildings && state.buildings.lodging) || 0;
   const OLD = ['bunkhouse', 'bunkhouse', 'longhouse', 'cottages', 'manor'];
-  build(state, OLD[Math.min(tier, OLD.length - 1)], { free: true });
-  for (let i = 0; i < (tier > 1 ? tier : 0); i++) build(state, 'longhouse', { free: true });
-  for (let i = 0; i < (state.tents || 0); i++) build(state, 'tent', { free: true });
+  build(state, OLD[Math.min(tier, OLD.length - 1)], { free: true, instant: true });
+  for (let i = 0; i < (tier > 1 ? tier : 0); i++) build(state, 'longhouse', { free: true, instant: true });
+  for (let i = 0; i < (state.tents || 0); i++) build(state, 'tent', { free: true, instant: true });
   state.beds = null;
   return true;
 }
@@ -229,6 +349,7 @@ const LodgingAPI = {
   RULES, ensure, typeOf, bedsOf, capacity, plotsUsed, build, demolish, find, setRule,
   admits, appeal, ruleText, ruleList, contextOf, billet, plan, invalidate,
   bedOf, housed, restFor, moraleFor, occupants, describe, summary, migrate,
+  sites, pendingBeds, crewCap, builderRate, buildersOf, siteInfo, construct, autoPolicy, autoPlan, affordsTwice, AUTO_TYPES,
 };
 if (typeof module !== 'undefined') module.exports = LodgingAPI;
 if (typeof window !== 'undefined') window.Lodging = LodgingAPI;

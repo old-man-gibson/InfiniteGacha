@@ -216,7 +216,7 @@ function frame(now) {
   if (three() !== !!world3d) swapCanvas();
   if (world3d) {
     for (const a of TownLife.onFoot()) if (!a.layers) bake(a);
-    lastView = world3d.renderTown(TownLife.current(), TownLife.knots(state), cam, dt * 1000, { hoverId: hover && hover.id, ringFor });
+    lastView = world3d.renderTown(TownLife.current(), TownLife.knots(state), cam, dt * 1000, { hoverId: hover && hover.id, ringFor, state });
     return;
   }
   resize();

@@ -28,26 +28,28 @@ const JOBS = {
 // A bunkhouse is the cheapest way to get a roster indoors and nobody is glad to be in it; a
 // sanctum sleeps three people extremely well. `plots` is what it costs the plateau, and tents
 // are a quarter of one each, so the old "one tent, one plot" squeeze is gone.
+// `work` is construction in builder-ticks: one builder at rate 1.0 for one tick (lodging.js
+// builderRate: STR 10, full stamina and morale) does 1. Beds open when the work is done.
 const LODGINGS = {
-  tent:      { label: 'Tent',       icon: '⛺',  beds: 2,  rest: 0.90, morale: -2, plots: 0.25,
+  tent:      { label: 'Tent',       icon: '⛺',  beds: 2,  rest: 0.90, morale: -2, plots: 0.25, work: 12,
                desc: 'Canvas. Two people, barely, and four of them fit on one plot.',
                cost: { gems: 25, crops: 10 } },
-  bunkhouse: { label: 'Bunkhouse',  icon: '🏚️', beds: 10, rest: 0.95, morale: -5, plots: 1,
+  bunkhouse: { label: 'Bunkhouse',  icon: '🏚️', beds: 10, rest: 0.95, morale: -5, plots: 1, work: 180,
                desc: 'Ten to a room. The cheapest way to get a roster under a roof, and it shows.',
                cost: { gems: 150, ore: 40, crops: 30 } },
-  longhouse: { label: 'Longhouse',  icon: '🏠',  beds: 6,  rest: 1.10, morale: 3,  plots: 1,
+  longhouse: { label: 'Longhouse',  icon: '🏠',  beds: 6,  rest: 1.10, morale: 3,  plots: 1, work: 240,
                desc: 'One hall, one fire, six beds. The first lodging anyone is happy in.',
                cost: { gems: 260, crops: 60, ore: 50 } },
-  barracks:  { label: 'Barracks',   icon: '🏛️', beds: 12, rest: 1.05, morale: 6,  plots: 1.5,
+  barracks:  { label: 'Barracks',   icon: '🏛️', beds: 12, rest: 1.05, morale: 6,  plots: 1.5, work: 420,
                desc: 'Built for a unit rather than a person. Set a team rule on it and it does what it is for.',
                cost: { gems: 520, ore: 160, crops: 90 } },
-  cottages:  { label: 'Cottages',   icon: '🏘️', beds: 4,  rest: 1.30, morale: 11, plots: 1,
+  cottages:  { label: 'Cottages',   icon: '🏘️', beds: 4,  rest: 1.30, morale: 11, plots: 1, work: 360,
                desc: 'A door of your own. Four sleep very well.',
                cost: { gems: 750, crops: 160, ore: 110 } },
-  manor:     { label: 'Manor',      icon: '🏰',  beds: 6,  rest: 1.45, morale: 16, plots: 2,
+  manor:     { label: 'Manor',      icon: '🏰',  beds: 6,  rest: 1.45, morale: 16, plots: 2, work: 1080,
                desc: 'Six beds worth boasting about, on two plots and a great deal of money.',
                cost: { gems: 1800, crops: 400, ore: 400, herbs: 150 } },
-  sanctum:   { label: 'Sanctum',    icon: '⛩️', beds: 3,  rest: 1.60, morale: 22, plots: 1,
+  sanctum:   { label: 'Sanctum',    icon: '⛩️', beds: 3,  rest: 1.60, morale: 22, plots: 1, work: 720,
                desc: 'Three people sleep better here than anywhere. Everyone else queues.',
                cost: { gems: 2600, herbs: 600, ore: 320 } },
 };

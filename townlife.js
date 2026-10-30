@@ -11,6 +11,7 @@
 //   on a mission   →  the gate, and then out through it. They walk there first, which is the
 //                     only reason the gate is a place rather than a button.
 //   at a post      →  the building that post is done in (maintenance is done in the street)
+//   building       →  the construction site they are on (lodging.js construct)
 //   hurt or spent  →  their own bed, whichever lodging billeted them
 //   off shift      →  whoever they would rather be with. This is the ONE decision in the file
 //                     that is not already made somewhere else: a character with a close friend
@@ -46,6 +47,7 @@ const plotOf = (map, key) => (key && map.plots[key]) || null;
  */
 function whereTo(state, c, map) {
   if (c.mission) return { goal: 'gate' };
+  if (c.building && map.plots['bed:' + c.building]) return { goal: 'bed:' + c.building };   // a construction site (lodging.js)
   const lo = LO();
   const bed = lo ? lo.bedOf(state, c) : null;
   const home = bed ? 'bed:' + bed.id : null;

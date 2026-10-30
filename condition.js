@@ -81,7 +81,7 @@ const EC = () => (typeof Econ !== 'undefined') ? Econ : require('./economy.js');
 // Per tick, before any multiplier. A tick is ten seconds, so a mid character (120 stamina)
 // works about forty ticks and rests about twenty: a two-to-one duty cycle, which is the shape
 // of the rotation the town settles into on its own.
-const DRAIN = { gather: 3, process: 2.5, town: 2, train: 4, idle: 0 };
+const DRAIN = { gather: 3, process: 2.5, town: 2, train: 4, build: 3, idle: 0 };   // build: a construction site (lodging.js)
 const REST_BASE = 4;               // stamina a tick of rest returns, before CON and lodging
 const REST_PER_CON = 0.2;
 const SPENT = 0.2;                 // at or below this fraction of stamina they are done for now
