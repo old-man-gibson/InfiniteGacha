@@ -491,7 +491,9 @@ async function partC() {
     check(typeof r === 'object' && near(r.bonus, before.bonus), `the bonus of the party that went (${r.bonus}) is not changed by a death during the run`);
     const won = !!S.run.field.result.won;
     const home = st.characters.filter(c => ids.includes(c.id));
-    check(!home.some(c => c.id === victim.id) && home.length === 3, `the victim is retired and the other three are back (${home.length} back)`);
+    // the fight can take somebody else too; whoever is still standing on the map comes home
+    const standing = S.run.field.actors.filter(a => a.char && a.alive).map(a => a.char.id).sort().join();
+    check(!home.some(c => c.id === victim.id) && home.map(c => c.id).sort().join() === standing, `the victim is retired and everyone still standing is back (${home.length} back)`);
     check(!Object.keys(st.bonds).some(k => k.split(':').map(Number).includes(victim.id)), 'no pair record names the dead character');
     let ok = home.length > 1;
     for (let x = 0; x < home.length; x++) for (let y = x + 1; y < home.length; y++) {

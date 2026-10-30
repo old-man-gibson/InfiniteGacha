@@ -50,7 +50,6 @@ const GUARD_LEASH = 2;         // tiles: how far a guard strays from the ward it
 const SCREEN = 7;              // tiles: a known hostile this close to the ward is gone out to meet
 const SCOUT_PERFECT = 80;      // party scouting at which the map holds no secrets (ai.js PERFECT)
 const SEARCH_PATIENCE = 60;   // in-game seconds before a fruitless search picks somewhere else
-const SEARCH_SPREAD = 14;      // tiles: the range over which walking further stops mattering much
 const DARK_RADIUS = 4;         // tiles: how much dark behind a frontier tile counts as worth opening
 const ENGAGE = 2;              // tiles: close enough to be in the same fight
 const KEEP = 2;                // tiles: how far ahead of the rest anybody walks before waiting. ENGAGE, deliberately:
@@ -233,24 +232,74 @@ function objectiveHint(s, c) {
 }
 
 /**
+ * Walking distance from the squad over ground it has SEEN, to every tile, plus one step onto any
+ * unseen tile next to that ground. A straight line is the wrong cost: a piece of frontier on the
+ * far side of a wall is two tiles away as the crow flies and forty on foot, and pricing it at two
+ * is what sent a squad back the length of the map to look at it. Routing only through seen
+ * ground keeps the squad from knowing a short cut it has not found.
+ */
+function knownWalk(s, from) {
+  const w = s.map.w, seen = s.seen;
+  const d = MG.distanceField({ w, h: s.map.h, passable: (x, y) => s.map.passable(x, y) && (seen[y * w + x] || (x === from.x && y === from.y)) }, [[from.x, from.y]]);
+  return (p) => {
+    let best = -1;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = p.x + dx, ny = p.y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= s.map.h) continue;
+      const v = d[ny * w + nx];
+      if (v >= 0 && (best < 0 || v + 1 < best)) best = v + 1;
+    }
+    return best;
+  };
+}
+
+/**
+ * The frontier in pieces: each run of edge tiles that touch one another is one doorway, one
+ * corridor mouth, one side of a cave. Choosing between PIECES rather than between tiles matters
+ * because a wide opening is many tiles and a narrow one is a few, and a choice weighted over tiles
+ * is a choice weighted toward whatever has the most edge — almost always the far side of the map.
+ */
+function frontierPieces(edge, w) {
+  const at = new Map(edge.map(p => [p.y * w + p.x, p]));
+  const pieces = [];
+  for (const [k0, p0] of at) {
+    if (!at.has(k0)) continue;
+    const piece = [p0]; at.delete(k0);
+    for (let i = 0; i < piece.length; i++) {
+      const p = piece[i];
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const k = (p.y + dy) * w + p.x + dx;
+        const q = at.get(k);
+        if (q && Math.abs(q.x - p.x) <= 1) { piece.push(q); at.delete(k); }
+      }
+    }
+    pieces.push(piece);
+  }
+  return pieces;
+}
+
+/**
  * Where to go looking. The squad searches TOGETHER — one place at a time, held until it is
  * revealed or until patience runs out — because a party that splits up to explore a map full of
  * things that kill people is a party that gets killed one at a time.
  *
- * Every piece of frontier is SCORED, and scouting decides only how clearly the squad can tell
- * one score from another — the same bounded-rationality idea ai.js uses for loadouts, which is
- * what makes a poor scout read as poor judgement rather than as a coin toss. Four things go into
- * a score:
+ * The plan is nearest-new-ground-first: of the pieces of frontier they can reach over ground they
+ * know, go to the one that opens the most dark per tile walked. Pieces are scored on:
  *
- *   near     walking there costs time, so close is worth something — but only something
- *   open     how much dark it actually opens (darkBehind), which is most of the judgement
- *   with     whether it lies the way they are already going. THIS is what stops the wandering:
- *            without it every re-pick was independent of the last, so a party could walk north
- *            for a minute, pick a beacon south, and undo the whole search
+ *   walk     tiles on foot to the nearest tile of the piece (knownWalk), the cost
+ *   open     how much dark lies behind it (darkBehind at its darkest tile), the gain. A crumb of
+ *            unseen floor close by still beats a hall across the map, which is the point: it is
+ *            cheapest to finish the ground they are standing in now, and every piece they leave
+ *            behind is a walk back later
+ *   with     whether it lies the way they are already going, so two pieces at the same price do
+ *            not pull them back and forth
  *   toward   scouting's guess at where the objective is, and nothing at zero scouting
  *
- * A bad scout therefore still commits: it sweeps in a direction, it just picks the wrong wing
- * and clears that first. A good one goes to the right wing. Neither mills about.
+ * Scouting decides how well the squad can read those numbers off the ground, not whether it uses
+ * them: every score is multiplied by a misjudgement drawn fresh at each pick, wide at no scouting
+ * and narrow near SCOUT_PERFECT, and the best-looking piece is the one they go to. A poor scout
+ * misreads which doorway leads further and sometimes takes the lesser one, but it does not cross
+ * the map to look at ground that is no better than the ground next to it.
  */
 function searchBeacon(s) {
   const b = s.beacon;
@@ -264,24 +313,43 @@ function searchBeacon(s) {
   const c = ours.length
     ? { x: avg(ours, 'x'), y: avg(ours, 'y') }
     : s.map.entry;
+  // walk from whoever is standing nearest the middle of the squad: the centre itself can be rock
+  const from = ours.length ? nearest(c, ours) : s.map.entry;
+  const walk = knownWalk(s, from);
   const sense = Math.min(1, s.scout / SCOUT_PERFECT);
   const head = s.heading;
   const guess = objectiveHint(s, c);
+  const dir = (p, v) => {
+    const dx = p.x - c.x, dy = p.y - c.y, len = Math.hypot(dx, dy) || 1;
+    return ((dx * v.x + dy * v.y) / len + 1) / 2;
+  };
 
-  const scored = edge.map(p => {
-    const dx = p.x - c.x, dy = p.y - c.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const near = 1 / (1 + len / SEARCH_SPREAD);
-    const open = 0.25 + darkBehind(s, p);
-    const with_ = head ? 0.4 + 0.6 * (((dx * head.x + dy * head.y) / len) + 1) / 2 : 1;
-    const hint = guess ? 0.35 + 0.65 * (((dx * guess.x + dy * guess.y) / len) + 1) / 2 : 1;
-    return { p, len, dx, dy, w: near * open * with_ * (1 - sense + sense * hint) };
-  });
-  // how sharply they can tell a good piece of ground from a poor one
-  const k = 1 + 5 * sense;
-  const won = R.weightedPick(scored, (e) => Math.pow(e.w, k));
-  s.beacon = won.p;
-  s.heading = { x: won.dx / won.len, y: won.dy / won.len };
+  const scored = [];
+  for (const piece of frontierPieces(edge, s.map.w)) {
+    let cost = -1, mouth = null, open = 0, deep = null;
+    for (const p of piece) {
+      const d = walk(p);
+      if (d >= 0 && (cost < 0 || d < cost)) { cost = d; mouth = p; }
+      const o = darkBehind(s, p);
+      if (o > open || !deep) { open = o; deep = p; }
+    }
+    // nothing they know of leads there: walk at it in a straight line, priced as such
+    if (cost < 0) { mouth = piece[0]; cost = 2 * Math.hypot(mouth.x - c.x, mouth.y - c.y); }
+    const with_ = head ? 0.5 + 0.5 * dir(mouth, head) : 1;
+    const hint = guess ? 0.35 + 0.65 * dir(mouth, guess) : 1;
+    const worth = (0.2 + open) / (DARK_RADIUS + cost) * with_ * (1 - sense + sense * hint);
+    // aim at the darkest tile of a piece close by, so they walk INTO the room rather than
+    // stopping at its door; a far piece is aimed at its mouth, the end they will reach first
+    scored.push({ p: cost <= DARK_RADIUS ? deep : mouth, worth });
+  }
+  const misread = 0.05 + 1.0 * (1 - sense);
+  const won = scored.reduce((best, e) => {
+    e.looks = e.worth * Math.exp(misread * R.jitter());
+    return !best || e.looks > best.looks ? e : best;
+  }, null);
+  const dx = won.p.x - c.x, dy = won.p.y - c.y, len = Math.hypot(dx, dy) || 1;
+  s.beacon = { x: won.p.x, y: won.p.y };
+  s.heading = { x: dx / len, y: dy / len };
   s.beaconAt = s.clock;
   return s.beacon;
 }
@@ -1949,7 +2017,9 @@ function descend(s) {
   s.counters.revealed = 0;
   s.fields = {};
   s.actors = [...carried, ...fallen];
-  for (const a of carried) { a.x = s.map.entry.x + (a.id % 3) - 1; a.y = s.map.entry.y; a.px = a.x; a.py = a.y; }
+  // by place in the squad, not by id: ids come from a counter that runs across missions, so a
+  // rank read off them put the same squad on different tiles depending on what was played before
+  carried.forEach((a, i) => { a.x = s.map.entry.x + (i % 3) - 1; a.y = s.map.entry.y; a.px = a.x; a.py = a.y; });
   for (const a of fallen) { a.x = s.map.entry.x; a.y = s.map.entry.y; a.px = a.x; a.py = a.y; }
   for (const g of s.map.spawns) {
     if (g.per === 'floor') spawnGroup(s, g);

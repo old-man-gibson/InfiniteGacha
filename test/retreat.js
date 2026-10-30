@@ -213,7 +213,8 @@ scenarioA('contact outlives the hostiles that caused it', () => {
     const { s, party } = begin('dungeon', 3);
     if (s.map.floors < 2) return;
     stepUntil(s, (x) => x.counters.sightings > 0);
-    if (s.result || s.skirmishes.length || s.counters.fights > 0) return;
+    // the sighting has to be on floor 1: a squad that finds the stairs before anything sees it is a different case
+    if (s.result || s.skirmishes.length || s.counters.fights > 0 || s.floorNo !== 1) return;
     const z = s.map.zones.stairs;
     for (const a of squadAlive(s)) { a.x = z.x; a.y = z.y; a.px = z.x; a.py = z.y; }
     for (let i = 0; i < 5 && s.floorNo === 1 && !s.result; i++) F.step(s);

@@ -220,6 +220,16 @@
         "8792"
       ],
       "port": 8792
+    },
+    {
+      "name": "static22",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8793"
+      ],
+      "port": 8793
     }
   ]
 }
