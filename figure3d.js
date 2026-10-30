@@ -969,18 +969,16 @@ function buildBodyRaw(look) {
     return y < torso[0].y ? [torso[0].rx, torso[0].rz] : [p.chestW, p.chestD];
   };
   const shirtShadow = sh && !mailCol && sh.body !== 'robe' && sh.body !== 'tunic', beltY = waistY - p.waist * 0.07;
-  torso = smoothRings(refine(torso, hemYs.concat(shirtShadow ? [shirtBottom - band] : [], [beltY - band])), 2);
-  // the shirt blouses a little over its hem, in loose folds
-  if (shirtShadow) for (const g of torso) if (g.y > shirtBottom && g.y < shirtBottom + p.waist * 0.5) { g.wave = 0.014 * (1 - (g.y - shirtBottom) / (p.waist * 0.5)); g.waveN = 5; }
+  torso = refine(torso, hemYs.concat(shirtShadow ? [shirtBottom - band] : [], [beltY - band]));
   const torsoShade = (y) => (shirtShadow ? below(y, shirtBottom, 0.25) : 1) * (lg && lg.cut !== 'plate' && !mailCol ? below(y, beltY, 0.15) : 1);
-  M.add(loft(torso, 26, { capTop: null, capBottom: 0.35, colourOf: (a, y) => under(torsoColour(a, y), torsoShade(y)) }));
-  // neck
+  // the neck continues the torso's profile up into the head
   const neckCol = look.helm && look.helm.kind === 'light' ? look.helm.leather : skin;
-  M.add(loft([
-    { y: neckY - p.neck * 0.3, rx: r.neck, rz: r.neck, w: 'neck', c: neckCol },
-    { y: headY + p.headH * 0.12, rx: r.neck * 0.95, rz: r.neck * 0.95, z: 0.004, w: [['neck', 0.3], ['head', 0.7]], c: neckCol },
-    { y: headY + p.headH * 0.3, rx: r.neck * 0.9, rz: r.neck * 0.9, z: 0.006, w: 'head', c: neckCol },
-  ], 10, { capTop: null, capBottom: null }));
+  const torsoAll = torso.concat([
+    { y: headY + p.headH * 0.12, rx: r.neck * 0.95, rz: r.neck * 0.95, z: 0.004, w: [['neck', 0.3], ['head', 0.7]] },
+    { y: headY + p.headH * 0.3, rx: r.neck * 0.9, rz: r.neck * 0.9, z: 0.006, w: 'head' },
+  ]);
+  const torsoPaint = (a, y) => y > neckY + p.neck * 0.2 ? neckCol : under(torsoColour(a, y), torsoShade(y));
+  const armSpec = [], legSpec = [];
 
   // ----- arms -----
   const sleeve = sh ? sh.sleeve : 'none';
@@ -1023,14 +1021,9 @@ function buildBodyRaw(look) {
       { y: wristY, rx: r.wrist * 0.82, rz: r.wrist * 1.05, x: ex, w: [[F, 0.6], [Hd, 0.4]] },
     ];
     const sleeved = sh && !mail && (sleeve === 'short' || sleeve === 'long' || sleeve === 'puff');
-    rings = smoothRings(refine(rings, [sleeveEnd, wristY + p.forearm * 0.45, wristY + p.forearm * 0.05, elbowY - p.forearm * 0.05]
-      .concat(mail && mail.kind === 'light' ? [wristY + p.forearm * 0.5] : [], sleeved ? [sleeveEnd - band] : [])), 2);
-    // creases in a long sleeve at the elbow, and the cloth gathering above any sleeve's hem
-    if (sleeved) for (const g of rings) {
-      if (sleeve === 'long' && Math.abs(g.y - elbowY) < p.forearm * 0.3) { g.wave = 0.035; g.waveN = 5; }
-      if (g.y > sleeveEnd && g.y < sleeveEnd + p.H * 0.03) { g.wave = 0.04; g.waveN = 6; }
-    }
-    M.add(loft(rings, 12, { capTop: 0.3, capBottom: 0.3, colourOf: (a, y) => under(armColour(a, y), sleeved ? below(y, sleeveEnd, 0.22) : 1) }));
+    rings = refine(rings, [sleeveEnd, wristY + p.forearm * 0.45, wristY + p.forearm * 0.05, elbowY - p.forearm * 0.05]
+      .concat(mail && mail.kind === 'light' ? [wristY + p.forearm * 0.5] : [], sleeved ? [sleeveEnd - band] : []));
+    armSpec.push({ s, side, rings, J, elbowY, wristY, hems: sleeved ? [sleeveEnd] : [], paint: (a, y) => under(armColour(a, y), sleeved ? below(y, sleeveEnd, 0.22) : 1) });
     if (sh && !mail && (sleeve === 'short' || sleeve === 'long' || sleeve === 'puff')) {
       const [cr, cz] = radiusAt(rings, sleeveEnd), lip = sleeve === 'puff' ? 1.05 : 1.12, F2 = sleeveEnd < elbowY ? F : A;
       M.add(loft([
@@ -1120,17 +1113,12 @@ function buildBodyRaw(look) {
       { y: ankY, rx: r.ankle * bootR, rz: r.ankle * bootR, x: ax, w: [[Sh, 0.6], [Ft, 0.4]] },
     ];
     const lip = feetCutv === 'fold' || feetCutv === 'rim' ? bootTop - p.shin * 0.04 : feetCutv === 'boots' ? bootTop - p.H * 0.01 : null;
-    rings = smoothRings(refine(rings, [bootTop, bootTop - p.shin * 0.08, legEnd, ankY + p.shin * 0.12, kneeY + p.thigh * 0.2,
-      legEnd - band, lip, lip != null ? lip - band : null, skirtHem, skirtHem - band]), 2);
-    // trousers bunch above the ankle and crease at the knee
-    if (cut === 'pants' || cut === 'cuffed' || cut === 'wide' || cut === 'puffy') for (const gr of rings) {
-      if (gr.y > bootTop + p.shin * 0.02 && gr.y < ankY + p.shin * 0.32) { gr.wave = 0.045; gr.waveN = 6; }
-      if (Math.abs(gr.y - kneeY) < p.shin * 0.12) { gr.wave = 0.025; gr.waveN = 4; }
-    }
+    rings = refine(rings, [bootTop, bootTop - p.shin * 0.08, legEnd, ankY + p.shin * 0.12, kneeY + p.thigh * 0.2,
+      legEnd - band, lip, lip != null ? lip - band : null, skirtHem, skirtHem - band]);
     const legShade = (y) => (cut === 'shorts' || cut === 'short' ? below(y, legEnd, 0.22) : 1)
       * (lip != null ? below(y, lip, 0.2) : 1)
       * (isFinite(skirtHem) ? (y > skirtHem ? lerp(0.8, 0.6, sstep(skirtHem, skirtHem + p.thigh * 0.5, y)) : below(y, skirtHem, 0.15)) : 1);
-    M.add(loft(rings, 12, { capTop: null, capBottom: 0.2, colourOf: (a, y) => under(legColour(a, y), legShade(y)) }));
+    legSpec.push({ s, side, rings, J, kneeY, ankY, hems: [legEnd, bootTop, lip, skirtHem], paint: (a, y) => under(legColour(a, y), legShade(y)) });
     if (feetCutv === 'boots' || feetCutv === 'plate') {
       const [br, bz] = radiusAt(rings, bootTop), bc = feetCutv === 'plate' ? sheen(bootCol, 0.7) : shade(bootCol, 1.1);
       M.add(loft([
@@ -1193,6 +1181,124 @@ function buildBodyRaw(look) {
         shoe([at(u0 - 0.03), at(u0 + 0.03)], 1.05, ft ? ft.colour : '#6a4a2a', true);
       }
     }
+  }
+
+  // ----- the body as one surface -----
+  // A control cage of rings sampled from the torso, arm and leg profiles: 12 vertices round the
+  // torso and neck, 8 round each limb. An arm joins the torso through the hole left by removing
+  // the 2x2 patch of torso faces round the shoulder joint; a leg joins half of the lowest torso
+  // ring and a crotch vertex shared with the other leg. One Catmull-Clark step, then every vertex
+  // moved onto the limit surface, makes one smooth surface, shoulders and hips included. That
+  // surface sits inside its cage (by about 5% for 12 sides, 10% for 8), so ring radii are scaled
+  // up by as much. The cage's shoulder corners stand out past the torso so the limit surface
+  // rounds over them into a deltoid instead of sloping straight down to the arm.
+  const cageP = [], cageW = [], cageF = [];
+  const cv = (pt, w) => { cageP.push(pt[0], pt[1], pt[2]); cageW.push(w); return cageW.length - 1; };
+  const onRing = (g, a, k) => {
+    let sx = Math.sin(a), cz = Math.cos(a);
+    if (g.sq !== 2) { sx = Math.sign(sx) * Math.pow(Math.abs(sx), 2 / g.sq); cz = Math.sign(cz) * Math.pow(Math.abs(cz), 2 / g.sq); }
+    return [g.x + sx * g.rx * k, g.y, g.z + cz * (cz >= 0 ? g.rzF : g.rzB) * k];
+  };
+  // heights that must keep their own ring (hems) are added where they fall between two others
+  const withHems = (ys, hems, lo, hi) => {
+    for (const y of hems) if (y != null && isFinite(y) && y > lo && y < hi && ys.every(t => Math.abs(t - y) > p.H * 0.012)) ys.push(y);
+    return ys;
+  };
+  const shY = Bp.armL.y, TK = 12;
+  const tys = withHems([hipY - p.pelvis * 0.3, hipY + p.pelvis * 0.25, spineY, spineY + p.waist * 0.55, chestY, shY - r.arm * 1.5, shY, shY + r.arm * 1.1,
+    neckY - p.neck * 0.05, neckY + p.neck * 0.6, headY + p.headH * 0.25], [beltY, waistY + p.waist * 0.07, shirtBottom], hipY, chestY).sort((a, b) => a - b);
+  const iA = tys.indexOf(shY);
+  const TR = tys.map((y, i) => {
+    const g = ringAt(torsoAll, y);
+    return Array.from({ length: TK }, (_, k) => {
+      const side = k >= 2 && k <= 4 ? 'L' : k >= 8 && k <= 10 ? 'R' : null;
+      if (side && i === iA && (k === 3 || k === 9)) return -1;                  // the middle of an arm hole
+      const pt = onRing(g, k / TK * TAU, 1.05);
+      if (side && i === iA - 1) pt[0] *= 0.94;                                   // armpit
+      if (side && i === iA + 1) pt[0] += Math.sign(pt[0]) * r.arm * (k === 3 || k === 9 ? 0.75 : 0.45);   // over the shoulder
+      if (side && i === iA) pt[0] += Math.sign(pt[0]) * r.arm * 0.35;
+      return cv(pt, side && i >= iA ? [['chest', 0.55], ['clav' + side, 0.45]] : g.w);
+    });
+  });
+  for (let i = 0; i < TR.length - 1; i++) for (let k = 0; k < TK; k++) {
+    const q = [TR[i][k], TR[i][(k + 1) % TK], TR[i + 1][(k + 1) % TK], TR[i + 1][k]];
+    if (q.every(v => v >= 0)) cageF.push(q);
+  }
+  cageF.push(TR[TR.length - 1].slice());                                           // closed inside the head
+  // a limb: 8-vertex rings at heights ys, the first joined to `loop`, the last closed (inside the hand or shoe)
+  const limb = (loop, ys, L) => {
+    let prev = loop;
+    for (const y of ys) {
+      const g = ringAt(L.rings, y);
+      const ring = Array.from({ length: 8 }, (_, j) => cv(onRing(g, L.s * j * TAU / 8, 1.1), g.w));
+      for (let j = 0; j < 8; j++) cageF.push([prev[j], prev[(j + 1) % 8], ring[(j + 1) % 8], ring[j]]);
+      prev = ring;
+    }
+    cageF.push(prev.slice());
+  };
+  for (const A of armSpec) {
+    // hole vertices in the arm ring's order: front, then over the top of the shoulder (the arm's
+    // outer side), back, and under it (the armpit, the arm's inner side)
+    const [kf, km, kb] = A.s > 0 ? [2, 3, 4] : [10, 9, 8];
+    const loop = [TR[iA][kf], TR[iA + 1][kf], TR[iA + 1][km], TR[iA + 1][kb], TR[iA][kb], TR[iA - 1][kb], TR[iA - 1][km], TR[iA - 1][kf]];
+    const top = A.J.y - p.upperArm * 0.38;
+    limb(loop, withHems([top, A.J.y - p.upperArm * 0.65, A.elbowY + p.upperArm * 0.12, A.elbowY, A.elbowY - p.forearm * 0.28, A.elbowY - p.forearm * 0.62,
+      A.wristY + p.forearm * 0.12, A.wristY], A.hems, A.wristY, top).sort((a, b) => b - a), A);
+  }
+  const crotch = cv([0, tys[0] - p.pelvis * 0.12, -p.pelvisD * 0.08], 'hips');
+  for (const Lg of legSpec) {
+    const B = TR[0], loop = Lg.s > 0 ? [B[1], B[2], B[3], B[4], B[5], B[6], crotch, B[0]] : [B[11], B[10], B[9], B[8], B[7], B[6], crotch, B[0]];
+    const top = Lg.J.y - p.thigh * 0.22;
+    limb(loop, withHems([top, Lg.J.y - p.thigh * 0.48, Lg.J.y - p.thigh * 0.76, Lg.kneeY + p.thigh * 0.06, Lg.kneeY - p.shin * 0.1, Lg.kneeY - p.shin * 0.32,
+      Lg.kneeY - p.shin * 0.58, Lg.kneeY - p.shin * 0.8, Lg.ankY], Lg.hems, Lg.ankY, top).sort((a, b) => b - a), Lg);
+  }
+  orientFaces(cageP, cageF);
+  {
+    // weights as dense rows over just the bones the cage uses
+    const used = [...new Set(cageW.flatMap(w => normWeights(w || 'root').map(e => e[0])))], col = new Map(used.map((b, i) => [b, i])), nb = used.length;
+    const W0 = new Float32Array(cageW.length * nb);
+    cageW.forEach((w, i) => { for (const [b, v] of normWeights(w || 'root')) W0[i * nb + col.get(b)] = v; });
+    const body = toLimit(catmullClark({ P: Float64Array.from(cageP), W: W0, F: cageF, nb }));
+    const n = body.P.length / 3, pos = new Float32Array(body.P), colr = new Float32Array(n * 3), sf = new Float32Array(n), si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    // each limb's columns in the weight rows, to tell which part a vertex mostly belongs to
+    const cols = (names) => names.map(nm => col.get(BI[nm])).filter(c => c != null);
+    for (const A of armSpec) A.cols = cols(['clav', 'arm', 'fore', 'hand'].map(b => b + A.side));
+    for (const Lg of legSpec) Lg.cols = cols(['thigh', 'shin', 'foot'].map(b => b + Lg.side));
+    const part = (row, L) => { let t = 0; for (const c of L.cols) t += body.W[row + c]; return t > 0.5; };
+    const bi = [0, 0, 0, 0], bw = [0, 0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const row = i * nb, x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+      // the four heaviest bones
+      bw.fill(0);
+      for (let b = 0; b < nb; b++) {
+        const v = body.W[row + b];
+        if (v <= bw[3]) continue;
+        let j = 3;
+        while (j > 0 && v > bw[j - 1]) { bw[j] = bw[j - 1]; bi[j] = bi[j - 1]; j--; }
+        bw[j] = v; bi[j] = used[b];
+      }
+      const sum = bw[0] + bw[1] + bw[2] + bw[3] || 1;
+      for (let j = 0; j < 4; j++) { si[i * 4 + j] = bw[j] > 0 ? bi[j] : 0; sw[i * 4 + j] = bw[j] / sum; }
+      // paint by the part the vertex mostly belongs to
+      let c = null;
+      for (const A of armSpec) if (part(row, A)) { const [cx, cz] = centreAt(A.rings, y); c = A.paint(Math.atan2(x - cx, z - cz), y); }
+      if (!c) for (const Lg of legSpec) if (part(row, Lg)) { const [cx, cz] = centreAt(Lg.rings, y); c = Lg.paint(Math.atan2(x - cx, z - cz), y); }
+      if (!c) c = torsoPaint(Math.atan2(x, z), y);
+      const cc = colour(c);
+      colr[i * 3] = cc.r; colr[i * 3 + 1] = cc.g; colr[i * 3 + 2] = cc.b;
+      sf[i] = surfOf(c);
+    }
+    const idx = new Uint32Array(body.F.length * 6);
+    body.F.forEach((f, j) => idx.set([f[0], f[1], f[2], f[0], f[2], f[3]], j * 6));
+    const geo = new T.BufferGeometry();
+    geo.setAttribute('position', new T.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new T.BufferAttribute(colr, 3));
+    geo.setAttribute('surf', new T.BufferAttribute(sf, 1));
+    geo.setAttribute('skinIndex', new T.BufferAttribute(si, 4));
+    geo.setAttribute('skinWeight', new T.BufferAttribute(sw, 4));
+    geo.setIndex(new T.BufferAttribute(idx, 1));
+    geo.computeVertexNormals();
+    M.add(geo);
   }
 
   // ----- skirts, robes, tunic hems, mail skirts -----
@@ -1433,39 +1539,164 @@ function blendWeights(wa, wb, t) {
 }
 
 /**
- * Insert n rings between each pair of rings at different heights: radii and offsets on a
- * Catmull-Rom curve through the neighbouring rings, bone weights blended. A limb's outline then
- * curves between the authored rings instead of bending at each one. Rings that share a y (hems,
- * from refine) are left as they are.
+ * Move every vertex of an all-quad mesh (one Catmull-Clark step done) to where it would end up
+ * after infinitely many: (n^2 v + 4 * edge neighbours + diagonal neighbours) / (n (n + 5)), n the
+ * vertex's valence. The smooth limit surface, at this mesh's density.
  */
-function smoothRings(rings, n = 2) {
-  const out = [], R = rings.length, eps = 1e-3;
-  const prevOf = (i) => { for (let j = i - 1; j >= 0; j--) if (Math.abs(rings[j].y - rings[i].y) > eps) return rings[j]; return rings[i]; };
-  const nextOf = (i) => { for (let j = i + 1; j < R; j++) if (Math.abs(rings[j].y - rings[i].y) > eps) return rings[j]; return rings[i]; };
-  const cr = (p0, p1, p2, p3, t) => 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
-  const val = (g, k, d) => g[k] != null ? g[k] : d(g);
-  for (let i = 0; i < R; i++) {
-    const a = rings[i];
-    out.push(a);
-    if (i === R - 1) continue;
-    const b = rings[i + 1];
-    if (Math.abs(b.y - a.y) <= eps) continue;
-    const p0 = prevOf(i), p3 = nextOf(i + 1);
-    const at = (k, d, t) => cr(val(p0, k, d), val(a, k, d), val(b, k, d), val(p3, k, d), t);
-    const zero = () => 0, rzOf = (g) => g.rz;
-    const hasF = a.rzF != null || b.rzF != null, hasB = a.rzB != null || b.rzB != null;
-    for (let k = 1; k <= n; k++) {
-      const t = k / (n + 1);
-      out.push({
-        y: lerp(a.y, b.y, t), rx: Math.max(at('rx', zero, t), 1e-4), rz: Math.max(at('rz', zero, t), 1e-4),
-        rzF: hasF ? Math.max(at('rzF', rzOf, t), 1e-4) : undefined, rzB: hasB ? Math.max(at('rzB', rzOf, t), 1e-4) : undefined,
-        x: at('x', zero, t), z: at('z', zero, t), sq: lerp(a.sq || 2, b.sq || 2, t),
-        w: blendWeights(a.w, b.w, t), c: t < 0.5 ? a.c : b.c,
-        wave: lerp(a.wave || 0, b.wave || 0, t), waveN: a.waveN || b.waveN,
-      });
+function toLimit({ P, W, F, nb }) {
+  const nv = P.length / 3, n = new Int32Array(nv), EP = new Float64Array(nv * 3), DP = new Float64Array(nv * 3), EW = new Float32Array(nv * nb), DW = new Float32Array(nv * nb);
+  for (const f of F) for (let k = 0; k < 4; k++) {
+    const v = f[k], a = f[(k + 1) % 4], b = f[(k + 3) % 4], d = f[(k + 2) % 4];
+    n[v]++;
+    for (let c = 0; c < 3; c++) { EP[v * 3 + c] += (P[a * 3 + c] + P[b * 3 + c]) / 2; DP[v * 3 + c] += P[d * 3 + c]; }
+    for (let c = 0; c < nb; c++) { EW[v * nb + c] += (W[a * nb + c] + W[b * nb + c]) / 2; DW[v * nb + c] += W[d * nb + c]; }
+  }
+  const LP = new Float64Array(P.length), LW = new Float32Array(W.length);
+  for (let v = 0; v < nv; v++) {
+    const k = n[v], q = k * (k + 5);
+    if (!k) { for (let c = 0; c < 3; c++) LP[v * 3 + c] = P[v * 3 + c]; continue; }
+    for (let c = 0; c < 3; c++) LP[v * 3 + c] = (k * k * P[v * 3 + c] + 4 * EP[v * 3 + c] + DP[v * 3 + c]) / q;
+    for (let c = 0; c < nb; c++) LW[v * nb + c] = (k * k * W[v * nb + c] + 4 * EW[v * nb + c] + DW[v * nb + c]) / q;
+  }
+  return { P: LP, W: LW, F, nb };
+}
+
+/** The centre (x, z) of a ring list at height y. */
+function centreAt(rings, y) {
+  for (let i = 0; i < rings.length - 1; i++) {
+    const a = rings[i], b = rings[i + 1];
+    if ((y - a.y) * (y - b.y) > 0 || a.y === b.y) continue;
+    const t = (y - a.y) / (b.y - a.y);
+    return [lerp(a.x || 0, b.x || 0, t), lerp(a.z || 0, b.z || 0, t)];
+  }
+  const e = Math.abs(y - rings[0].y) < Math.abs(y - rings[rings.length - 1].y) ? rings[0] : rings[rings.length - 1];
+  return [e.x || 0, e.z || 0];
+}
+
+/** A ring's parameters at height y, interpolated between the rings either side (clamped at the ends). */
+function ringAt(rings, y) {
+  const first = rings[0], last = rings[rings.length - 1], up = last.y > first.y;
+  const dz = (g, k) => g[k] != null ? g[k] : g.rz;
+  const of = (g) => ({ y, rx: g.rx, rz: g.rz, rzF: dz(g, 'rzF'), rzB: dz(g, 'rzB'), x: g.x || 0, z: g.z || 0, sq: g.sq || 2, w: g.w });
+  if (up ? y <= first.y : y >= first.y) return of(first);
+  if (up ? y >= last.y : y <= last.y) return of(last);
+  for (let i = 0; i < rings.length - 1; i++) {
+    const a = rings[i], b = rings[i + 1];
+    if ((y - a.y) * (y - b.y) > 0 || a.y === b.y) continue;
+    const t = (y - a.y) / (b.y - a.y);
+    return {
+      y, rx: lerp(a.rx, b.rx, t), rz: lerp(a.rz, b.rz, t), rzF: lerp(dz(a, 'rzF'), dz(b, 'rzF'), t), rzB: lerp(dz(a, 'rzB'), dz(b, 'rzB'), t),
+      x: lerp(a.x || 0, b.x || 0, t), z: lerp(a.z || 0, b.z || 0, t), sq: lerp(a.sq || 2, b.sq || 2, t), w: blendWeights(a.w, b.w, t),
+    };
+  }
+  return of(last);
+}
+
+/**
+ * Make the faces of a closed polygon mesh wind the same way (each shared edge runs opposite ways
+ * in its two faces), outward: flip everything if the enclosed volume comes out negative.
+ */
+function orientFaces(P, F) {
+  const nv = P.length / 3, byEdge = new Map(), key = (a, b) => a < b ? a * nv + b : b * nv + a;
+  F.forEach((f, i) => f.forEach((a, k) => { const kk = key(a, f[(k + 1) % f.length]); (byEdge.get(kk) || byEdge.set(kk, []).get(kk)).push(i); }));
+  const seen = new Uint8Array(F.length);
+  for (let s = 0; s < F.length; s++) {
+    if (seen[s]) continue;
+    seen[s] = 1;
+    const queue = [s];
+    while (queue.length) {
+      const f = F[queue.pop()];
+      for (let k = 0; k < f.length; k++) {
+        const a = f[k], b = f[(k + 1) % f.length];
+        for (const gi of byEdge.get(key(a, b))) {
+          if (seen[gi]) continue;
+          const g = F[gi], ia = g.indexOf(a);
+          if (g[(ia + 1) % g.length] === b) g.reverse();
+          seen[gi] = 1;
+          queue.push(gi);
+        }
+      }
     }
   }
-  return out;
+  let vol = 0;
+  for (const f of F) for (let k = 1; k < f.length - 1; k++) {
+    const a = f[0] * 3, b = f[k] * 3, c = f[k + 1] * 3;
+    vol += P[a] * (P[b + 1] * P[c + 2] - P[b + 2] * P[c + 1]) - P[a + 1] * (P[b] * P[c + 2] - P[b + 2] * P[c]) + P[a + 2] * (P[b] * P[c + 1] - P[b + 1] * P[c]);
+  }
+  if (vol < 0) for (const f of F) f.reverse();
+}
+
+/**
+ * One Catmull-Clark step. P: positions (3 per vertex), W: bone weights (nb per vertex), F: faces as
+ * index lists of any length. Returns the refined mesh, all quads: the vertices first, then one per
+ * edge, then one per face. Weights are averaged with the same rules as positions.
+ */
+function catmullClark({ P, W, F, nb }) {
+  const nv = P.length / 3, nf = F.length;
+  const FP = new Float64Array(nf * 3), FW = new Float32Array(nf * nb);
+  for (let f = 0; f < nf; f++) {
+    const face = F[f], k = 1 / face.length;
+    for (const v of face) {
+      for (let c = 0; c < 3; c++) FP[f * 3 + c] += P[v * 3 + c] * k;
+      for (let b = 0; b < nb; b++) FW[f * nb + b] += W[v * nb + b] * k;
+    }
+  }
+  const edgeOf = new Map(), EV = [], EF = [], FE = [];
+  for (let f = 0; f < nf; f++) {
+    const face = F[f], n = face.length, fe = new Array(n);
+    for (let k = 0; k < n; k++) {
+      const a = face[k], b = face[(k + 1) % n], key = a < b ? a * nv + b : b * nv + a;
+      let e = edgeOf.get(key);
+      if (e === undefined) { e = EV.length / 2; edgeOf.set(key, e); EV.push(a, b); EF.push(f, -1); } else EF[e * 2 + 1] = f;
+      fe[k] = e;
+    }
+    FE.push(fe);
+  }
+  const ne = EV.length / 2, n = nv + ne + nf;
+  const NP = new Float64Array(n * 3), NW = new Float32Array(n * nb);
+  const QP = new Float64Array(nv * 3), RP = new Float64Array(nv * 3), QW = new Float32Array(nv * nb), RW = new Float32Array(nv * nb);
+  const nF = new Int32Array(nv), nE = new Int32Array(nv), rim = new Uint8Array(nv);
+  for (let e = 0; e < ne; e++) {
+    const a = EV[e * 2], b = EV[e * 2 + 1], f0 = EF[e * 2], f1 = EF[e * 2 + 1], o = nv + e;
+    for (let c = 0; c < 3; c++) {
+      const m = (P[a * 3 + c] + P[b * 3 + c]) / 2;
+      NP[o * 3 + c] = f1 >= 0 ? (m + (FP[f0 * 3 + c] + FP[f1 * 3 + c]) / 2) / 2 : m;
+      RP[a * 3 + c] += m; RP[b * 3 + c] += m;
+    }
+    for (let bi = 0; bi < nb; bi++) {
+      const m = (W[a * nb + bi] + W[b * nb + bi]) / 2;
+      NW[o * nb + bi] = f1 >= 0 ? (m + (FW[f0 * nb + bi] + FW[f1 * nb + bi]) / 2) / 2 : m;
+      RW[a * nb + bi] += m; RW[b * nb + bi] += m;
+    }
+    nE[a]++; nE[b]++;
+    if (f1 < 0) rim[a] = rim[b] = 1;
+  }
+  for (let f = 0; f < nf; f++) {
+    const o = nv + ne + f;
+    for (let c = 0; c < 3; c++) NP[o * 3 + c] = FP[f * 3 + c];
+    for (let b = 0; b < nb; b++) NW[o * nb + b] = FW[f * nb + b];
+    for (const v of F[f]) {
+      nF[v]++;
+      for (let c = 0; c < 3; c++) QP[v * 3 + c] += FP[f * 3 + c];
+      for (let b = 0; b < nb; b++) QW[v * nb + b] += FW[f * nb + b];
+    }
+  }
+  for (let v = 0; v < nv; v++) {
+    const k = nE[v];
+    if (!k || rim[v]) {
+      for (let c = 0; c < 3; c++) NP[v * 3 + c] = P[v * 3 + c];
+      for (let b = 0; b < nb; b++) NW[v * nb + b] = W[v * nb + b];
+      continue;
+    }
+    for (let c = 0; c < 3; c++) NP[v * 3 + c] = (QP[v * 3 + c] / nF[v] + 2 * RP[v * 3 + c] / k + (k - 3) * P[v * 3 + c]) / k;
+    for (let b = 0; b < nb; b++) NW[v * nb + b] = (QW[v * nb + b] / nF[v] + 2 * RW[v * nb + b] / k + (k - 3) * W[v * nb + b]) / k;
+  }
+  const NF = [];
+  for (let f = 0; f < nf; f++) {
+    const face = F[f], fe = FE[f], m = face.length;
+    for (let k = 0; k < m; k++) NF.push([face[k], nv + fe[k], nv + ne + f, nv + fe[(k - 1 + m) % m]]);
+  }
+  return { P: NP, W: NW, F: NF, nb };
 }
 
 // ---------- head, face, hair ----------
