@@ -96,7 +96,12 @@ function drawMap(fx, s, view, { zones = true } = {}) {
       }
     }
   }
-  if (!zones) return;
+  if (zones) drawZones(fx, s, view);
+}
+
+/** The zone rings, their names and the portal. Split out so world3d.js can lay them on its ground. */
+function drawZones(fx, s, view) {
+  const { scale, ox, oy } = view;
   fx.font = '10px system-ui, sans-serif';
   fx.textAlign = 'center';
   const defence = window.Field && Field.defenceProgress ? Field.defenceProgress(s) : null;
@@ -306,10 +311,11 @@ function rehydrate(a) {
 
 /** Rebuild one pog with a different rim, when someone is hurt or down. */
 function reface(a, ring, { size = null } = {}) {
+  a.ringColour = ring;                  // the 3D view draws the rim as a ring on the ground
   if (!a.layers) return;
   const px = size || pogSize;
   a.token = Tokens.pog(a.layers, { name: a.label, size: px, font: pogFont(px), ring });
 }
 
-window.FieldView = { PALETTE, FAMILY, layout, drawMap, drawActors, drawPortal, progressRing, faces, reface, rescale, rehydrate, namer, spriteFor };
+window.FieldView = { PALETTE, FAMILY, layout, drawMap, drawZones, drawActors, follow, drawPortal, progressRing, faces, reface, rescale, rehydrate, namer, spriteFor };
 })();

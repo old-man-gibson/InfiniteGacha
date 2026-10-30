@@ -1655,6 +1655,12 @@ function mountTownMap() {
   const host = $('#townmap-host');
   if (!host || typeof TownView === 'undefined') return;
   TownView.mount(host, () => state, { pickCharacter: (c) => openSheet(c) });
+  const box3d = $('#townmap-3d');
+  if (box3d && !box3d.dataset.wired) {
+    box3d.dataset.wired = '1';
+    box3d.checked = TownView.is3d;
+    box3d.addEventListener('change', (e) => TownView.set3d(e.target.checked));
+  }
   const line = $('#townmap-census');
   if (!line) return;
   TownLife.sync(state);            // so the first render says who is where, not "nobody about"

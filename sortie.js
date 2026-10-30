@@ -1568,6 +1568,11 @@ function renderMemorial(host) {
 const ZOOM_MIN = 1, ZOOM_MAX = 8, ZOOM_STEP = 1.4;
 const cam = { zoom: 1, x: null, y: null, follow: true };
 let lastView = null;         // the transform the last frame drew with, for pixel -> tile
+// The 3D view (world3d.js) or the flat one. A view preference, so it lives in the browser and
+// not in the save. A canvas cannot switch between a 2D and a WebGL context, so toggling it
+// re-renders the panel, which makes a new canvas.
+let view3d = (() => { try { return localStorage.getItem('ig.view3d') !== '0'; } catch (e) { return true; } })();
+let world = null;            // the World3D bound to the current map canvas
 
 /** Where the squad is, in tiles, using the smoothed draw positions so the camera does not jitter. */
 function squadCentre(s) {
@@ -1601,6 +1606,7 @@ function syncCam() {
 /** Canvas pixels -> map tiles, through whatever transform the last frame used. */
 function tileAt(cv, ev) {
   if (!lastView) return null;
+  if (lastView.tileAt) return lastView.tileAt(ev);
   const r = cv.getBoundingClientRect();
   const px = (ev.clientX - r.left) * (cv.width / r.width);
   const py = (ev.clientY - r.top) * (cv.height / r.height);
@@ -1611,6 +1617,11 @@ function wireCamera(cv) {
   el('#cam-in').addEventListener('click', () => setZoom(cam.zoom * ZOOM_STEP));
   el('#cam-out').addEventListener('click', () => setZoom(cam.zoom / ZOOM_STEP));
   el('#cam-whole').addEventListener('click', () => { cam.zoom = 1; cam.follow = true; syncCam(); });
+  el('#cam-3d').addEventListener('change', (e) => {
+    view3d = e.target.checked;
+    try { localStorage.setItem('ig.view3d', view3d ? '1' : '0'); } catch (err) { /* private window */ }
+    render();
+  });
   el('#cam-follow').addEventListener('change', (e) => {
     cam.follow = e.target.checked;
     if (cam.follow) { const c = squadCentre(run.field); if (c) { cam.x = c.x; cam.y = c.y; } }
@@ -1649,7 +1660,7 @@ function wireCamera(cv) {
     const r = cv.getBoundingClientRect();
     const k = (cv.width / r.width) / lastView.scale;
     cam.x -= (e.clientX - drag.x) * k;
-    cam.y -= (e.clientY - drag.y) * k;
+    cam.y -= (e.clientY - drag.y) * k * lastView.scale / (lastView.scaleY || lastView.scale);
     drag = { x: e.clientX, y: e.clientY };
   });
   const release = (e) => {
@@ -1670,6 +1681,7 @@ const coarse = () => typeof matchMedia === 'function' && matchMedia('(pointer: c
 
 function renderRun(host) {
   const s = run.field, m = run.mission;
+  try { view3d = localStorage.getItem('ig.view3d') !== '0'; } catch (e) { /* keep what we had */ }
   host.innerHTML = `
     <div class="jobbox">
       <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
@@ -1682,6 +1694,7 @@ function renderRun(host) {
             <button class="ghost" id="cam-in" title="Zoom in">+</button>
             <label title="Keep the view on the squad as they walk"><input type="checkbox" id="cam-follow" checked> follow</label>
             <button class="ghost" id="cam-whole" title="Back to the whole map">whole map</button>
+            <label title="Draw the field in 3D instead of flat tiles"><input type="checkbox" id="cam-3d"${view3d ? ' checked' : ''}> 3D</label>
             <span class="sub">${coarse() ? 'pinch to zoom · drag to look around' : 'wheel to zoom · drag to look around'}</span>
           </div>
         </div>
@@ -1818,20 +1831,30 @@ function renderSide() {
 function frame(now) {
   raf = requestAnimationFrame(frame);
   const cv = document.getElementById('sortie-map');
-  if (!run || !cv || !cv.isConnected) return;
+  if (!run || !cv || !cv.isConnected) {
+    if (world) { world.dispose(); world = null; }      // the panel is gone: hand back its WebGL context
+    return;
+  }
   const dt = Math.min(400, now - lastReal);
   acc += dt;
   lastReal = now;
   if (cam.follow) { const c = squadCentre(run.field); if (c) { cam.x = c.x; cam.y = c.y; } }
-  const view = FieldView.layout(cv, run.field.map, { zoom: cam.zoom, cx: cam.x, cy: cam.y });
-  lastView = view;
-  // Faces are re-baked, not stretched, and only when the number changes — a pog is about three
-  // tiles across at any zoom, which keeps a party readable whether the view holds the whole map
-  // or one room of it.
-  FieldView.rescale(run.field, Math.min(96, Math.max(24, view.scale * 2.6)));
-  const fx = cv.getContext('2d');
-  FieldView.drawMap(fx, run.field, view);
-  FieldView.drawActors(fx, run.field, view, dt);
+  if (world && world.canvas !== cv) { world.dispose(); world = null; }
+  if (view3d && World3D.pending()) return;      // three.js still loading: taking a 2D context now would rule WebGL out
+  if (view3d && World3D.ready()) {
+    if (!world) world = World3D.create(cv);
+    lastView = world.render(run.field, { zoom: cam.zoom, cx: cam.x, cy: cam.y }, dt);
+  } else {
+    const view = FieldView.layout(cv, run.field.map, { zoom: cam.zoom, cx: cam.x, cy: cam.y });
+    lastView = view;
+    // Faces are re-baked, not stretched, and only when the number changes — a pog is about three
+    // tiles across at any zoom, which keeps a party readable whether the view holds the whole map
+    // or one room of it.
+    FieldView.rescale(run.field, Math.min(96, Math.max(24, view.scale * 2.6)));
+    const fx = cv.getContext('2d');
+    FieldView.drawMap(fx, run.field, view);
+    FieldView.drawActors(fx, run.field, view, dt);
+  }
   const clock = el('#sortie-clock');
   if (clock) clock.textContent =
     `in-game ${MT.realClock(run.field.clock * MT.TIME.scale)} of ${MT.realClock(run.mission.duration * MT.TIME.scale)}` +

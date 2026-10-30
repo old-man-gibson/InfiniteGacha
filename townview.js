@@ -6,6 +6,10 @@
 // when somebody builds — and every frame after that is a blit plus however many people are out.
 // A hundred-character town is a hundred cached discs, which is nothing.
 //
+// With three.js loaded and the 3D view switched on (the same preference as the field map, see
+// pref3d), the town is drawn by world3d.js instead: same sim, same camera numbers, same picking.
+// A canvas cannot hand out both a 2D and a WebGL context, so switching makes a new canvas.
+//
 // Friendship is the only relation drawn here that is not also written down. Two characters who
 // like each other and are standing together get a line between them. The line is faint and is
 // drawn only while they are together.
@@ -37,6 +41,13 @@ let ground = null, groundSig = '';
 let cam = { zoom: 1, cx: null, cy: null };
 let drag = null, hover = null;
 let onPick = null, getState = null;
+let world3d = null, lastView = null;       // the 3D renderer while it is in use, and its last view
+
+const PREF = 'ig.view3d';
+const pref3d = () => { try { return localStorage.getItem(PREF) !== '0'; } catch (e) { return true; } };
+/** 3D wanted and three.js loaded. While three.js is still loading this is false and pending() true. */
+const three = () => pref3d() && typeof World3D !== 'undefined' && World3D.ready();
+const pending = () => pref3d() && typeof World3D !== 'undefined' && World3D.pending();
 
 // ---------- the camera ----------
 function layout() {
@@ -56,8 +67,14 @@ const tileAt = (ev, view) => {
   const r = cv.getBoundingClientRect();
   const px = (ev.clientX - r.left) * (cv.width / r.width);
   const py = (ev.clientY - r.top) * (cv.height / r.height);
+  if (view.tileAt) {                       // 3D: through the camera onto the ground
+    const t = view.tileAt(ev) || { x: -99, y: -99 };
+    return { x: t.x + 0.5, y: t.y + 0.5, px, py };
+  }
   return { x: (px - view.ox) / view.scale, y: (py - view.oy) / view.scale, px, py };
 };
+/** The view the handlers measure against: the flat layout, or what the 3D renderer last drew. */
+const viewNow = () => (world3d ? lastView : layout());
 
 // ---------- the ground ----------
 /** Everything that does not move, baked once. */
@@ -186,15 +203,23 @@ function drawFolk(view, state) {
 // ---------- the loop ----------
 function frame(now) {
   raf = requestAnimationFrame(frame);
+  if (!cv && host && !pending()) swapCanvas();     // mounted while three.js was still loading
   if (!cv || !cv.isConnected || cv.offsetParent === null) return;
   const state = getState && getState();
   if (!state) return;
   const dt = Math.min(0.1, (now - last) / 1000 || 0);
   last = now;
 
-  resize();
   TownLife.sync(state);
   TownLife.step(state, dt);
+  if (pending()) return;                      // three.js still loading: no 2D context yet
+  if (three() !== !!world3d) swapCanvas();
+  if (world3d) {
+    for (const a of TownLife.onFoot()) if (!a.layers) bake(a);
+    lastView = world3d.renderTown(TownLife.current(), TownLife.knots(state), cam, dt * 1000, { hoverId: hover && hover.id, ringFor });
+    return;
+  }
+  resize();
   const map = TownLife.current().map;
   const view = layout();
 
@@ -218,25 +243,41 @@ function resize() {
 }
 
 // ---------- wiring ----------
+/** A fresh canvas for whichever view is wanted now, in place of the old one. */
+function swapCanvas() {
+  if (world3d) { world3d.dispose(); world3d = null; lastView = null; }
+  const next = document.createElement('canvas');
+  next.className = 'townmap';
+  if (cv) cv.replaceWith(next); else if (host) host.append(next);
+  cv = next;
+  wire();
+  ground = null;
+  if (three()) { fx = null; world3d = World3D.create(cv, { fill: true }); }
+  else fx = cv.getContext('2d');
+}
+
 function wire() {
   cv.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const view = layout();
+    const view = viewNow();
+    if (!view) return;
     const t = tileAt(e, view);
     cam.zoom = Math.max(1, Math.min(6, cam.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
     if (cam.zoom > 1) { cam.cx = t.x; cam.cy = t.y; } else { cam.cx = cam.cy = null; }
   }, { passive: false });
 
   cv.addEventListener('pointerdown', (e) => {
-    const view = layout();
+    const view = viewNow();
+    if (!view) return;
     drag = { ...tileAt(e, view), cx: cam.cx, cy: cam.cy, moved: false };
     cv.setPointerCapture(e.pointerId);
   });
   cv.addEventListener('pointermove', (e) => {
-    const view = layout();
+    const view = viewNow();
+    if (!view) return;
     const t = tileAt(e, view);
     if (drag) {
-      const dx = (t.px - drag.px) / view.scale, dy = (t.py - drag.py) / view.scale;
+      const dx = (t.px - drag.px) / view.scale, dy = (t.py - drag.py) / (view.scaleY || view.scale);
       if (Math.abs(dx) + Math.abs(dy) > 0.4) drag.moved = true;
       if (cam.zoom > 1) {
         cam.cx = (drag.cx == null ? TownLife.current().map.w / 2 : drag.cx) - dx;
@@ -250,8 +291,8 @@ function wire() {
   cv.addEventListener('pointerup', (e) => {
     const moved = drag && drag.moved;
     drag = null;
-    if (moved) return;
-    const hit = pick(tileAt(e, layout()));
+    if (moved || !viewNow()) return;
+    const hit = pick(tileAt(e, viewNow()));
     if (hit && onPick) onPick(hit.char);
   });
   cv.addEventListener('pointerleave', () => { drag = null; hover = null; });
@@ -275,13 +316,8 @@ function mount(element, stateGetter, { pickCharacter = null } = {}) {
   host = element;
   getState = stateGetter;
   onPick = pickCharacter;
-  if (!cv) {
-    cv = document.createElement('canvas');
-    cv.className = 'townmap';
-    fx = cv.getContext('2d');
-    wire();
-  }
-  if (cv.parentElement !== host) { host.innerHTML = ''; host.append(cv); }
+  if (!cv && !pending()) swapCanvas();
+  if (cv && cv.parentElement !== host) { host.innerHTML = ''; host.append(cv); }
   ground = null;
   if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); }
 }
@@ -299,5 +335,10 @@ function focus(charId, zoom = 3) {
   return true;
 }
 
-window.TownView = { mount, unmount, focus, PAL, get camera() { return cam; } };
+/** Switch between the 3D and the flat town. Shared with the field map, so it is one setting. */
+function set3d(on) {
+  try { localStorage.setItem(PREF, on ? '1' : '0'); } catch (e) { /* private window: this visit only */ }
+}
+
+window.TownView = { mount, unmount, focus, set3d, get is3d() { return pref3d(); }, PAL, get camera() { return cam; } };
 })();

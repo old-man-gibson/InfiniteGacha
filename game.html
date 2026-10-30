@@ -454,7 +454,7 @@
     <h2>Town</h2>
     <div id="townmap-box">
       <div id="townmap-host"></div>
-      <div class="townmap-legend"><span id="townmap-census" class="sub"></span><span class="sub townmap-hint">scroll to zoom · drag to pan · click somebody to open their sheet</span></div>
+      <div class="townmap-legend"><span id="townmap-census" class="sub"></span><span class="sub townmap-hint"><label title="Draw the town in 3D instead of flat tiles"><input type="checkbox" id="townmap-3d"> 3D</label> · scroll to zoom · drag to pan · click somebody to open their sheet</span></div>
     </div>
     <div id="town"></div>
   </section>
@@ -561,6 +561,8 @@
 <script src="tactics.js"></script>
 <script src="tokens.js"></script>
 <script src="fieldview.js"></script>
+<script src="world3d.js"></script>
+<script>import('./vendor/three.module.min.js').then(m => { window.THREE = m; }, () => { window.THREE = null; });</script>
 <script src="townview.js"></script>
 <script src="sortie.js"></script>
 </body>

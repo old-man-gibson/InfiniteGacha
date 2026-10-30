@@ -45,6 +45,8 @@
   <button id="go">Roll and run</button>
   <button id="pause" class="ghost">Pause</button>
   <select id="speed"><option value="1">1×</option><option value="3">3×</option><option value="8">8×</option></select>
+  <label class="stat" title="Draw the field in 3D (three.js) instead of flat tiles"><input type="checkbox" id="view3d" checked> 3D</label>
+  <span class="stat">wheel to zoom</span>
   <span id="clock"></span>
 </div>
 
@@ -90,8 +92,31 @@
 <script src="lpc.js"></script>
 <script src="tokens.js"></script>
 <script src="fieldview.js"></script>
+<script src="world3d.js"></script>
+<script>import('./vendor/three.module.min.js').then(m => { window.THREE = m; }, () => { window.THREE = null; });</script>
 <script>
-const cv = document.getElementById('field'), fx = cv.getContext('2d');
+// The canvas is swapped for a fresh one when the view changes: a canvas that has handed out a 2D
+// context cannot give a WebGL one, and the other way round.
+let cv = document.getElementById('field'), fx = null, world = null;
+let want3d = document.getElementById('view3d').checked, zoom = 1;
+function freshCanvas() {
+  const next = cv.cloneNode(false);
+  cv.replaceWith(next);
+  cv = next;
+  fx = null;
+  if (world) { world.dispose(); world = null; }
+  cv.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoom = Math.max(1, Math.min(8, zoom * (e.deltaY < 0 ? 1.4 : 1 / 1.4)));
+  }, { passive: false });
+}
+freshCanvas();
+document.getElementById('view3d').onchange = (e) => { want3d = e.target.checked; freshCanvas(); };
+function squadCentre(s) {
+  const ours = s.actors.filter(a => a.role === 'squad' && a.alive && !a.extracted);
+  if (!ours.length) return {};
+  return { cx: ours.reduce((n, a) => n + (a.rx ?? a.x), 0) / ours.length, cy: ours.reduce((n, a) => n + (a.ry ?? a.y), 0) / ours.length };
+}
 const PARTY_NAMES = ['Aldric', 'Brenna', 'Kael', 'Sable', 'Vyrax', 'Lumen', 'Rook', 'Ysolde'];
 let state = null, view = null, running = false, speedMul = 1, acc = 0, lastReal = 0;
 
@@ -130,7 +155,6 @@ async function rollMission() {
   const party = Array.from({ length: size }, (_, i) => ({ name: PARTY_NAMES[i], maxHp: 70, power: 5 }));
 
   state = Field.start(mission, { party, name: FieldView.namer });
-  view = FieldView.layout(cv, state.map);
   document.getElementById('log').innerHTML = '';
   appendLog(state.log);
   renderPanels(state);
@@ -156,9 +180,17 @@ function frame(now) {
     }
     if (steps) renderPanels(state);
   }
-  view = FieldView.layout(cv, state.map);
-  FieldView.drawMap(fx, state, view);
-  FieldView.drawActors(fx, state, view, dt);
+  if (want3d && World3D.pending()) return;           // three.js still loading: do not take a 2D context
+  if (want3d && World3D.ready()) {
+    if (!world) world = World3D.create(cv);
+    view = world.render(state, { zoom, ...squadCentre(state) }, dt);
+  } else {
+    if (!fx) fx = cv.getContext('2d');
+    view = FieldView.layout(cv, state.map, { zoom, ...squadCentre(state) });
+    FieldView.rescale(state, Math.min(96, Math.max(24, view.scale * 2.6)));
+    FieldView.drawMap(fx, state, view);
+    FieldView.drawActors(fx, state, view, dt);
+  }
   document.getElementById('clock').textContent =
     `in-game ${MissionTypes.realClock(state.clock * MissionTypes.TIME.scale)} of ${MissionTypes.realClock(state.mission.duration * MissionTypes.TIME.scale)}` +
     ` · watched ${MissionTypes.realClock(state.clock)}` + (state.result ? (state.result.won ? ' · WON' : ' · LOST') : '');
