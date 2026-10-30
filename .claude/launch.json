@@ -230,6 +230,16 @@
         "8793"
       ],
       "port": 8793
+    },
+    {
+      "name": "explore",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8802"
+      ],
+      "port": 8802
     }
   ]
 }

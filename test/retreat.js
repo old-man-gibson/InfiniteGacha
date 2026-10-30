@@ -491,7 +491,8 @@ async function partB() {
         const z = f.map.zones.stairs;
         for (const a of squadAlive(f)) { a.x = z.x; a.y = z.y; a.px = z.x; a.py = z.y; a.engaged = null; }
         for (let i = 0; i < 200 && f.floorNo === 1 && !f.result; i++) Fd.step(f);
-        if (f.floorNo !== 2 || f.result) return;
+        // a squad that broke off the floor-1 fight is already on its way home, which is not the state these checks read
+        if (f.floorNo !== 2 || f.result || f.withdrew) return;
         out = { r, f, mission, chars, victim };
       });
       return out;

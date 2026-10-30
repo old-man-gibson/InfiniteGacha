@@ -51,6 +51,8 @@ const SCREEN = 7;              // tiles: a known hostile this close to the ward 
 const SCOUT_PERFECT = 80;      // party scouting at which the map holds no secrets (ai.js PERFECT)
 const SEARCH_PATIENCE = 60;   // in-game seconds before a fruitless search picks somewhere else
 const DARK_RADIUS = 4;         // tiles: how much dark behind a frontier tile counts as worth opening
+const BACKTRACK = 4;           // a tile walked back toward the way in costs this many tiles walked onward (searchBeacon)
+const MISREAD_CELL = 6;        // tiles: the ground a squad misjudges as one place (searchBeacon)
 const ENGAGE = 2;              // tiles: close enough to be in the same fight
 const KEEP = 2;                // tiles: how far ahead of the rest anybody walks before waiting. ENGAGE, deliberately:
                                // a fight takes in everyone within that of somebody already in it, so a squad that
@@ -241,7 +243,7 @@ function objectiveHint(s, c) {
 function knownWalk(s, from) {
   const w = s.map.w, seen = s.seen;
   const d = MG.distanceField({ w, h: s.map.h, passable: (x, y) => s.map.passable(x, y) && (seen[y * w + x] || (x === from.x && y === from.y)) }, [[from.x, from.y]]);
-  return (p) => {
+  const to = (p) => {
     let best = -1;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       const nx = p.x + dx, ny = p.y + dy;
@@ -251,6 +253,8 @@ function knownWalk(s, from) {
     }
     return best;
   };
+  to.at = (p) => d[p.y * w + p.x];
+  return to;
 }
 
 /**
@@ -296,10 +300,13 @@ function frontierPieces(edge, w) {
  *   toward   scouting's guess at where the objective is, and nothing at zero scouting
  *
  * Scouting decides how well the squad can read those numbers off the ground, not whether it uses
- * them: every score is multiplied by a misjudgement drawn fresh at each pick, wide at no scouting
- * and narrow near SCOUT_PERFECT, and the best-looking piece is the one they go to. A poor scout
- * misreads which doorway leads further and sometimes takes the lesser one, but it does not cross
- * the map to look at ground that is no better than the ground next to it.
+ * them: every score is multiplied by a misjudgement, wide at no scouting and narrow near
+ * SCOUT_PERFECT, and the best-looking piece is the one they go to. A poor scout misreads which
+ * doorway leads further and sometimes takes the lesser one, but it does not cross the map to look
+ * at ground that is no better than the ground next to it. The misjudgement belongs to the PLACE
+ * (one draw per MISREAD_CELL square, kept for the mission): a squad that has decided the east door
+ * looks poor still thinks so ten seconds later, instead of re-rolling its opinion at every pick and
+ * swinging between two doors.
  */
 function searchBeacon(s) {
   const b = s.beacon;
@@ -316,6 +323,8 @@ function searchBeacon(s) {
   // walk from whoever is standing nearest the middle of the squad: the centre itself can be rock
   const from = ours.length ? nearest(c, ours) : s.map.entry;
   const walk = knownWalk(s, from);
+  const root = knownWalk(s, s.map.entry);
+  const deepNow = root.at(from);
   const sense = Math.min(1, s.scout / SCOUT_PERFECT);
   const head = s.heading;
   const guess = objectiveHint(s, c);
@@ -335,16 +344,26 @@ function searchBeacon(s) {
     }
     // nothing they know of leads there: walk at it in a straight line, priced as such
     if (cost < 0) { mouth = piece[0]; cost = 2 * Math.hypot(mouth.x - c.x, mouth.y - c.y); }
+    // How much of that walk heads back toward the way in. A piece further down the branch they
+    // are in lies about `cost` deeper than they stand and none of the walk is back; a piece off a
+    // junction behind them makes them walk back to the junction first. Charging those tiles extra
+    // is what has them finish a branch before they leave it, which is all the right-hand rule
+    // does in a maze, and it holds in open rooms where following a wall does not.
+    const deepThere = root(mouth);
+    const back = deepNow >= 0 && deepThere >= 0 ? Math.max(0, (cost + deepNow - deepThere) / 2) : 0;
     const with_ = head ? 0.5 + 0.5 * dir(mouth, head) : 1;
     const hint = guess ? 0.35 + 0.65 * dir(mouth, guess) : 1;
-    const worth = (0.2 + open) / (DARK_RADIUS + cost) * with_ * (1 - sense + sense * hint);
+    const worth = (0.2 + open) / (DARK_RADIUS + cost + BACKTRACK * back) * with_ * (1 - sense + sense * hint);
     // aim at the darkest tile of a piece close by, so they walk INTO the room rather than
     // stopping at its door; a far piece is aimed at its mouth, the end they will reach first
     scored.push({ p: cost <= DARK_RADIUS ? deep : mouth, worth });
   }
   const misread = 0.05 + 1.0 * (1 - sense);
+  const opinion = s.misreads || (s.misreads = {});
   const won = scored.reduce((best, e) => {
-    e.looks = e.worth * Math.exp(misread * R.jitter());
+    const cell = `${Math.floor(e.p.x / MISREAD_CELL)},${Math.floor(e.p.y / MISREAD_CELL)}`;
+    if (opinion[cell] === undefined) opinion[cell] = R.jitter();
+    e.looks = e.worth * Math.exp(misread * opinion[cell]);
     return !best || e.looks > best.looks ? e : best;
   }, null);
   const dx = won.p.x - c.x, dy = won.p.y - c.y, len = Math.hypot(dx, dy) || 1;
@@ -2014,6 +2033,7 @@ function descend(s) {
   s.map = MG.build(s.mission, { floor: s.floorNo });
   s.walkable = MG.floorTiles(s.map.tiles).length;
   s.seen = new Uint8Array(s.map.w * s.map.h);
+  s.misreads = {};
   s.counters.revealed = 0;
   s.fields = {};
   s.actors = [...carried, ...fallen];
@@ -2234,7 +2254,7 @@ function save(s) {
     portal: s.portal || null, overtime: s.overtime || 0, leaveNow: !!s.leaveNow, doneAt: s.doneAt || null,
     withdrew: s.withdrew || null, side: s.side || [], sideWin: s.sideWin || null, will: s.will || null,
     details: (s.details || []).map(d => ({ ...d })),
-    scout: s.scout, beacon: s.beacon, beaconAt: s.beaconAt, heading: s.heading,
+    scout: s.scout, beacon: s.beacon, beaconAt: s.beaconAt, heading: s.heading, misreads: s.misreads || {},
     walkable: s.walkable, result: s.result,
     objectiveZone: s.objectiveZone, holdZone: s.holdZone,
     mission: s.mission,
@@ -2275,7 +2295,7 @@ function restore(o, { resolve = attrition, name = plainName, rate = null, charac
     withdrew: o.withdrew || null, side: o.side || [], sideWin: o.sideWin || null, will: o.will || WILL,
     details: o.details || [], nextPlan: 0, grieve, tactics,
     scout: o.scout || 0, omniscient: (o.scout || 0) >= SCOUT_PERFECT, heading: o.heading || null,
-    beacon: o.beacon || null, beaconAt: o.beaconAt || 0,
+    beacon: o.beacon || null, beaconAt: o.beaconAt || 0, misreads: o.misreads || {},
     objectiveZone: o.objectiveZone, holdZone: o.holdZone,
   };
   for (const a of o.actors) {
