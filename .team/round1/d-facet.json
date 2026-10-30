@@ -1,0 +1,37 @@
+{
+ "unit": "d-facet",
+ "title": "Facet engine: keep loading or stop",
+ "overseerSummary": "My recommendation: stop loading it (branch B) until a proposal grants facets; the files stay on disk. Approve = branch B. Reject = keep loading it as today. Write 'branch A' in the note if you want facets granted this round.",
+ "proposals": [
+  {
+   "id": "cleanup-facet-decision",
+   "title": "Decide the facet engine: grant hooks if abilities are granted this round, otherwise stop loading it",
+   "problem": "The facet engine (innate abilities) is wired into combat and the town tick, but nothing grants a facet to a character or monster and no sheet panel shows one. game.html loads 15 facet scripts, 257,017 bytes of 1,518,611 bytes of JS (16.9%), with no producer. Three hook gaps in game-owned files would take effect the day something grants a facet.",
+   "evidence": [
+    "Producers: grep for 'facets' outside the engine finds game.js:86-88 (initialise to [], {}), game.js:413-414 (town tick event, guarded by typeof FacetHostIG) and combat.js:35-39 (FA() accessor); no forge.generate, push or assignment outside tests.",
+    "Size: the 15 facet script tags in game.html (facet/*.js 11 files plus facet.quantities, facet.quantities.town, facet.schema, facet.host .ig.js) total 257,017 bytes (computed from the tags); field.html carries the same 15 (grep count 16 'facet' lines in each page).",
+    "Hook gap 1: facet/facet.relations.js:260-274 'toll' creates a cell with tier 'mission'; facet.host.ig.js:691 townTierEnd has no caller anywhere (grep), so a mission-tier cell never resets after a sortie.",
+    "Hook gap 2: facet.host.ig.js:691-695 townTierEnd returns early without attaching the person record, unlike townEvent at facet.host.ig.js:680-686, so calling it for a character whose record is not yet attached does nothing.",
+    "Hook gap 3: combat.js:654 is the only tierEnd call and passes 'encounter'; grep finds no caller of FacetHostIG.detach (facet.host.ig.js:670), so Facet.attached and the host ref table grow by one record per fighter per encounter.",
+    "Every game-side call is typeof-guarded (game.js:413, combat.js:38), so removing the script tags leaves the game running as it does now. facet/MANIFEST.json pins the engine files by hash, so the files themselves stay."
+   ],
+   "change": "This is an either/or item for the overseer, decided from the list of approved proposals:\nBranch A, if any approved proposal grants facets (for example one at summon for 3 stars and up, shown on the sheet): keep the tags and add the three game-owned fixes with it. (1) sortie.js settle() calls FacetHostIG.townTierEnd('mission', c) for each party member. (2) townTierEnd attaches the person record when it is missing, as townEvent does. (3) combat.js:654 calls FacetHostIG.detach(f) after tierEnd('encounter', f). New test/facet.hooks.js: a mission-tier toll cell reset after settle; Facet.attached count is unchanged after six encounters.\nBranch B (default when no approved proposal grants facets): remove the 15 facet <script> tags from game.html and field.html. Files, tests, MANIFEST and all typeof-guarded hooks stay; adding the tags back restores the integration. test/facet.integration.js and facet.node.js keep passing because they require the files directly.",
+   "playerEffect": "Branch B changes nothing the player sees and removes 16.9% of the script bytes loaded. Branch A only matters when abilities are granted; then 'toll' abilities ('every use makes the next one cost more', facet.relations.js:274) would otherwise carry their cost across missions.",
+   "secondOrder": "Branch B makes 'is anything granting facets?' an explicit decision instead of an assumption; any later grant proposal adds the tags and the three fixes in one change. Branch A closes the only known leaks before any ability can exercise them.",
+   "files": [
+    "game.html",
+    "field.html",
+    "sortie.js",
+    "combat.js",
+    "facet.host.ig.js",
+    "test/facet.hooks.js"
+   ],
+   "size": "S",
+   "risks": "Branch B reverses integration work the user paid for and pinned by hash; it is reversible by adding 15 lines but the user should confirm. Branch A edits facet.host.ig.js, which is game-owned (the pinned files are facet/*.js), and must be re-read before editing. Which branch applies depends on proposals from other lenses that I cannot see.",
+   "status": "reworked",
+   "response": "Both attackers demanded this be its own decision with an explicit rule; this is that rule. I did not re-run the builder's earlier counts of generated mission-tier cells (27 of 428) and have not cited them; the evidence above is the code and the byte count I computed from game.html. Design attack that the item belongs to the systems lens: it does, which is why Branch A waits on a grant proposal being approved.",
+   "lens": "cleanup",
+   "verdicts": []
+  }
+ ]
+}

@@ -1,0 +1,225 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "static",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8765"
+      ],
+      "port": 8765
+    },
+    {
+      "name": "static2",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8766"
+      ],
+      "port": 8766
+    },
+    {
+      "name": "static3",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8767"
+      ],
+      "port": 8767
+    },
+    {
+      "name": "static4",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8768"
+      ],
+      "port": 8768
+    },
+    {
+      "name": "static5",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8769"
+      ],
+      "port": 8769
+    },
+    {
+      "name": "static6",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8770"
+      ],
+      "port": 8770
+    },
+    {
+      "name": "static7",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8771"
+      ],
+      "port": 8771
+    },
+    {
+      "name": "static8",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8772"
+      ],
+      "port": 8772
+    },
+    {
+      "name": "static9",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8773"
+      ],
+      "port": 8773
+    },
+    {
+      "name": "static10",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8774"
+      ],
+      "port": 8774
+    },
+    {
+      "name": "static11",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8775"
+      ],
+      "port": 8775
+    },
+    {
+      "name": "static12",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8776"
+      ],
+      "port": 8776
+    },
+    {
+      "name": "static13",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8777"
+      ],
+      "port": 8777
+    },
+    {
+      "name": "static14",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8778"
+      ],
+      "port": 8778
+    },
+    {
+      "name": "static15",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8779"
+      ],
+      "port": 8779
+    },
+    {
+      "name": "facet1",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8781"
+      ],
+      "port": 8781
+    },
+    {
+      "name": "static16",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8780"
+      ],
+      "port": 8780
+    },
+    {
+      "name": "static17",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8782"
+      ],
+      "port": 8782
+    },
+    {
+      "name": "static18",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8783"
+      ],
+      "port": 8783
+    },
+    {
+      "name": "static19",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8790"
+      ],
+      "port": 8790
+    },
+    {
+      "name": "static20",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8791"
+      ],
+      "port": 8791
+    },
+    {
+      "name": "static21",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8792"
+      ],
+      "port": 8792
+    }
+  ]
+}

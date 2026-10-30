@@ -1,0 +1,57 @@
+{
+ "unit": "u-record",
+ "title": "Service record and altar grief",
+ "overseerSummary": "Counters only (sorties, wins, kills, close calls, deaths witnessed), shown in the picker, the altar and the memorial. The altar lists who would grieve and by how much morale. Read by display code only.",
+ "proposals": [
+  {
+   "id": "loop-record",
+   "title": "Give each character a service record, keep it on the memorial, and make the altar show who would grieve",
+   "problem": "A character is a stat block with a face. Nothing accumulates about what they did, so nothing separates one 3-star swordsman from another beyond numbers, and a death leaves a name, a cause and four aptitudes. Bonds, the strongest attachment data in the game, are deleted at death. Sacrificing a character at the altar costs the survivors nothing, although a battlefield death does.",
+   "evidence": [
+    "grep over *.js: no c.record, c.service, c.deeds or equivalent exists; bonds.js:115 p.runs is the only per-pair history; crew.js:151 teams store runs and lastRun, with no per-character equivalent",
+    "roster.js:87-105 memorial entry: uuid, face, id, name, race, bodyType, stars, cause, at, served, selections, top four aptitudes",
+    "bonds.js:228-248 mourn() computes hit = min(35, v x GRIEF 0.55) for every relation with v above 12, applies morale, and deletes every pair with the fallen; game.js:380-388 grieve() logs at most four lines",
+    "sacrifice.js:177-181 Sacrifice.apply calls Roster.fall with cause 'sacrificed to <name>'; game.js:828-838 sacrificeTo calls neither grieve() nor Bonds.mourn; Bonds.tidy later drops the orphaned pairs silently",
+    "sortie.js:439-541 settle() calls Roster.fall (450) before G().grieve (464), so a snapshot taken inside Roster.fall sees the bonds intact",
+    "game.js:2506 the altar confirmation names only the favourite flag and potential; game.js:2484-2498 rows show stats gained",
+    "game.js:978 the sheet's MOR bar shows morale as cur/100 with its band, so a stated morale hit can be checked against it before and after",
+    "game.js:1297-1313 the character sheet has Condition, Stats, Aptitudes, Affinity, Carrying, Knows, Company; no history",
+    "combat.js:71 party fighters carry char; combat.js:618 receives killer; no party-side summoned or pet fighters exist in combat.js, so killer.char is set whenever a party member kills",
+    "sortie.js:1043-1046 party cards show stars, race, scouting; sortie.js:1096-1126 memorial cards",
+    "MEASURED context from loop-ledger: deaths per sortie 0.26-0.53 without the free undo, so the record will accumulate and be lost at a real rate"
+   ],
+   "change": "1. Data on the character, plain JSON, defaulted in game.js load() (near game.js:93): c.record = { since, out, won, kills, witnessed, closeCall: { low, mission, at } | null, last: { mission, won, at } | null }. All counters; no stored labels. 'since' = load time, so old characters say 'record starts <date>'.\n2. Writers, all in sortie.js: resolve() credits kills to killer.char when present; settle() increments out for each survivor, won when the contract completed, witnessed by the number of squad members who fell on a map they were on, closeCall when a.low (loop-wounds) is the lowest seen, last always.\n3. Roster.fall (roster.js:87) is the one place that copies c.record and the two strongest bonds with v above 12 (name, Bonds.tier word, runs) into the memorial entry, before Bonds.mourn deletes them. Bonds is resolved optionally like the other modules. Memorial cards show the counts, the closest two, and the cause with killer (from loop-ledger part A). This is the only edit to the body of Roster.fall.\n4. Sheet: a 'Record' section after Company: sorties, wins, kills, comrades lost, closest call with mission and time, last sortie. Party picker cards add 'N sorties, last: won'. A label ('new' under 3 sorties, 'seasoned' from 8, 'veteran' from 20) is computed in one display function from the counts and read by no behaviour.\n5. Altar: add Bonds.grief(state, c, chars), the pure first half of mourn() that returns { c, v, hit, tier } for each relation with v above 12; mourn() calls it so the arithmetic exists once. Each offering row lists who would grieve with their tier word and the morale hit ('Kess, friend: -14 morale'), checkable against Kess's MOR bar after the sacrifice. The confirmation line names the record ('14 sorties, 31 kills'). sacrificeTo calls the same G().grieve(sac) that settle() calls, after Sacrifice.apply, so the log lines, morale hits and Crew.mourn occur as for a battlefield death. If the systems lens lands a single death function, this one call moves into it; no second grief path is introduced.\n6. Node test: sacrificing a character with a bond of value v lowers the friend's morale by min(35, 0.55 v) and logs it.",
+   "playerEffect": "Characters differ by what they have been through, visible at the three places the player decides about a person: the party picker, the altar and the memorial. The altar, which is the disposal path for the common 1-star pull, shows named consequences for anyone with bonds, and a well-liked character can be kept out of it because the cost is displayed with its size.",
+   "secondOrder": "Altar offerings now depend on bonds and on sortie history, which couples the Altar tab to the Field. Grief after a sacrifice feeds Condition morale and Crew.mourn, which already exist. Memorial entries become readable accounts, which raises the cost of the permadeath decisions in loop-retreat. The record is the data source for a later history-based temper system if one is wanted. Tactics already reads pair runs (tactics.js:101-115); the record gives the picker a way to see who has worked together.",
+   "files": [
+    "sortie.js",
+    "roster.js",
+    "game.js",
+    "bonds.js"
+   ],
+   "size": "M",
+   "risks": "Altar economics (sacrifice.js SHARE) were tuned without grief. The hit is capped at 35 morale and bonds are sparse by design (bonds.js header), but how many sacrificial 1-stars carry a bond above 12 is not measured; the altar rows will show it in the first browser session, and if nearly every character has one the cost is a real tax, if almost none it is inert. Memorial storage grows by about 250 bytes per entry at the 500-entry cap (roster.js:21). Old saves default to an empty record. Roster.fall and loop-ledger share a call site; loop-ledger changes only the cause argument.",
+   "status": "kept",
+   "response": "Design attack (history is not a lever; altar grief mostly misses unbonded 1-stars): the record does not change outcomes and is not meant to; its use is at the decision points. The altar behaviour is intentional: a fresh pull with no bonds costs nothing and a bonded one shows its cost, and the open question of how often that happens is called out in risks with the check that answers it. Design demand (merge grief-on-sacrifice into the single death entry, not a second path): sacrificeTo calls the same grieve() used by settle(); Bonds.grief is only the read-only half that the altar rows need before the player confirms, and mourn() is refactored to call it. If a unified death function lands, the call moves into it. Design demand (show the morale hit per friend as a number checkable against the Company section): the Company section shows tier words by design, so the number is checkable against the friend's MOR bar (game.js:978), which is where the hit lands. Design demand (veteran word from counts in one display function, no behaviour reads it; old saves start at zero and say so): adopted. Design demand (kill credit for summoned/pet allies): checked, no party-side summons exist in combat.js, and credit is skipped when killer.char is absent. Engineering demands 1-4 (one death function with the order snapshot, Roster.fall, mourn, Crew.mourn; readings in one function; default in load() with a 'record starts' date; Node test): adopted as steps 3, 4, 1 and 6.",
+   "lens": "loop",
+   "verdicts": [
+    {
+     "id": "loop-record",
+     "verdict": "keep",
+     "attack": "The counters are history, not a lever: a player who sends the best four keeps sending them, and 'new/seasoned/veteran' is decoration. The altar grief only bites for bonded characters, so the altar's main use, fresh 1-star pulls with no bonds, is untouched and the cost lands on exactly the sacrifices the player was least likely to make. It is the fourth proposal writing into settle() and the second writing into Roster.fall.",
+     "evidenceCheck": "Verified: no c.record or equivalent anywhere (grep); roster.js:95-105 memorial fields as cited; Bonds.mourn deletes every pair with the fallen (bonds.js:228-248) after game.js:380-388 logs at most four lines; sacrifice.js:181 calls Roster.fall with cause 'sacrificed to' and game.js:828-838 calls neither grieve() nor Bonds.mourn; altar confirmation text at game.js:2506; sheet sections at game.js:1297-1313 have no history; combat.js:618 kills carry killer; crew.js:151 teams store runs.",
+     "demand": "Merge item 5 (grief on sacrifice) into systems-one-debrief's single death entry instead of adding Bonds.grief as a second path. The altar row must show the morale hit per named friend as a number the player can check against the Company section. The veteran word is computed from the counts in one display function and read by no behaviour. Old saves start at zero and the sheet says so. Kill credit must be confirmed for summoned and pet allies (killer.char undefined).",
+     "antagonist": "design"
+    },
+    {
+     "id": "loop-record",
+     "verdict": "keep",
+     "attack": "Altar grief changes sacrifice economics (sacrifice.js SHARE) that were tuned without it; the hit is capped at 35 and bonds are sparse, so the cost is bounded but unmeasured. 'new/seasoned/veteran' is a stored-looking label and must stay display-only. It overlaps systems-one-debrief's single death path: whoever owns Roster.fall must snapshot bonds before Bonds.mourn deletes them (bonds.js:240-246).",
+     "evidenceCheck": "Verified by grep that no c.record/service/deeds field exists; roster.js:95-105 memorial record; bonds.js:228-247 mourn() deletes the pairs; game.js:380-388 grieve() logs four lines; sacrifice.js:177-181 and game.js:828-838 sacrificeTo call neither grieve nor Bonds.mourn; game.js:2506 confirm line names fav, potential and class only; sortie.js:1043-1046 party cards; res.kills carry killer (combat.js:618) and party fighters carry .char (combat.js:71); crew.js:148-154 teams store runs and lastRun.",
+     "demand": "1) One death function shared with systems-one-debrief, order: snapshot bonds, Roster.fall, Bonds.mourn, Crew.mourn. 2) The readings live in one display function and are never read by code. 3) Default c.record in game.js load() and print 'record starts <date>' on old characters. 4) Node test: sacrificing a bonded character lowers the friend's morale by min(35, v x GRIEF) and logs it.",
+     "antagonist": "engineering"
+    }
+   ]
+  }
+ ]
+}

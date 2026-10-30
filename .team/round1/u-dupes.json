@@ -1,0 +1,59 @@
+{
+ "unit": "u-dupes",
+ "title": "Grade lists and aptitude fraction",
+ "overseerSummary": "Cut to the small part both antagonists accepted. The wider helper merges wait until after the build rounds.",
+ "proposals": [
+  {
+   "id": "cleanup-merge-duplicates",
+   "title": "Shared helpers: read the grade list once, the species-tier map once, and the aptitude fraction through one function",
+   "problem": "Two lists still contain grades that do not exist ('mythic', 'divine') and re-spell the grade order that missiontypes.js already holds. The grade-to-species-tier map is copied into the test harness. Four call sites compute 'aptitude as a fraction of the ladder' with three behaviours (unclamped three times, clamped once) and prowess.js uses a different ceiling (S** = 689 against A+ = 539) under a name that does not say so.",
+   "evidence": [
+    "missiontypes.js:100 GRADES = ['basic','veteran','elite','ancient','legendary']; report.js:83 order list and combat.js:114 step list both add 'mythic' and 'divine'; no species carries either tier (missions.js:55-60 TIERS has five).",
+    "fieldview.js:30 TIER_FOR and test/field.harness.js:12 TIER_FOR are the same object literal ('ancient' maps to 'elite'), the harness copy exists because fieldview.js needs the DOM.",
+    "Aptitude fraction: ai.js:171-172 scouting, classes.js:1513-1514 advise and tactics.js:90-92 divide by toAbsolute(A+) with no clamp; classes.js:1603-1604 fitness clamps with Math.min(1, ...); prowess.js:44 capAbs uses STAGES.length-1. Node: toAbsolute at the top of A+ is 17*30+29 = 539; at S** it is 22*30+29 = 689.",
+    "Grade tables that stay out of scope: field.js:66, 80-81 (GRADE_WITS, GRADE_POWER, GRADE_HP), sortie.js:27 GRADE_BUMP, tokens.js:43 GRADE_SIZE, missions.js:59 TIERS, bestiary.js:188 GRADE_WORD.",
+    "Harness determinism: `POW=0.6 node test/field.harness.js 6 off on` run twice gives identical output (diff empty, about 50 s), so a byte-identical gate is usable; at 40 runs it takes about 5.5 minutes.",
+    "Duplicates deferred: clamp in bonds.js:40, condition.js:56, tactics.js:55, temper.js:108; clamp01 in condition.js:55 and prowess.js:40; cap in report.js:12 and spellcraft.js:113; camera axis in fieldview.js:94-100 and townview.js:47-53; filter row in filters.js:66-214 and sortie.js:578-677."
+   ],
+   "change": "1) report.js:83 and combat.js:114 read MissionTypes.GRADES (lazy accessor idiom as elsewhere) and lose 'mythic' and 'divine'; the indices of the five real grades are unchanged.\n2) New MT.SPECIES_TIER = { basic, veteran, elite, ancient: 'elite', legendary } beside GRADES; fieldview.js namer and test/field.harness.js read it and the two copies are deleted.\n3) New Prof.share(entry, { clamp = false, ceiling = 'advance' }) = toAbsolute(entry) / toAbsolute(ceiling top), where 'advance' is the top of A+ (539) and 'ladder' is the top of S** (689). ai.js:171, classes.js:1513, tactics.js:90 call it unclamped; classes.js:1603 calls it with clamp: true; prowess.js:44 calls it with ceiling: 'ladder', so the disagreement between the two ceilings is one named argument instead of five copies of an expression.\n4) Gate: `POW=0.6 node test/field.harness.js 40 off on` byte-identical before and after (covers field.js, tactics.js, ai.js scouting); plus new test/aptitude.snapshot.js that prints Classes.advise, leanings and fitness for 300 seeded characters and must be identical before and after (the harness does not exercise classes.js sites); the three facet tests; a stub-DOM boot with 0 exceptions.\n5) Explicitly deferred past this round: util.js (clamp, clamp01, cap), the camera-axis merge, the filter-row merge and the full grade table. The grade table is left to whoever changes field.js GRADE_POWER/GRADE_HP for the field-rating work; GRADE_SIZE and GRADE_WORD are presentation and stay out of missiontypes.js.",
+   "playerEffect": "No visible change by design. The checks are that the harness table and the aptitude snapshot are identical and the stub boot raises 0 exceptions.",
+   "secondOrder": "Naming the ceiling makes the existing disagreement between prowess (S**) and class fit (A+) visible in one argument; both stay as they are, and the overseer can decide later whether the Might and Guard radar axes should use 'advance'. A new grade appears in GRADES and SPECIES_TIER instead of in two extra lists.",
+   "files": [
+    "missiontypes.js",
+    "report.js",
+    "combat.js",
+    "fieldview.js",
+    "test/field.harness.js",
+    "proficiency.js",
+    "ai.js",
+    "classes.js",
+    "tactics.js",
+    "prowess.js",
+    "test/aptitude.snapshot.js"
+   ],
+   "size": "S",
+   "risks": "combat.js gains a lazy dependency on missiontypes.js (loaded after it in game.html; resolved at call time through the accessor idiom). ai.js, classes.js and tactics.js are edited by other builders: re-read before each edit and run the gate after each file. Prof.share keeps today's behaviour at each site, so it does not settle which ceiling is right.",
+   "status": "reworked",
+   "response": "Cut from L to S as both attackers demanded. Engineering demand 1 (remove mythic/divine and Prof.share() with each site's current clamp): done. Design demand to read MT.GRADES instead of hand lists and delete the harness TIER_FOR copy: done; the harness copy cannot import fieldview.js (it needs the DOM), so the map moves to MT.SPECIES_TIER. Design attack that GRADE_SIZE and GRADE_WORD are presentation: accepted, they stay out. Design attack that Prof.share relabels the disagreement: partly right, which is why the ceiling is an argument and the decision is left explicit; dropping it would leave five copies. Engineering demand that the grade-table merge belong to the field-rating owner: accepted. util.js, clamp, camera-axis and filter-row merges are deferred past this run and listed above.",
+   "lens": "cleanup",
+   "verdicts": [
+    {
+     "id": "cleanup-merge-duplicates",
+     "verdict": "rework",
+     "attack": "Twenty-three files, every one of them also in a design proposal, for 'no visible change by design'. A new util.js changes the load order of three pages. GRADE_SIZE (draw height) and GRADE_WORD (brief text) are presentation and do not belong in missiontypes.js data. The aptitude-fraction merge keeps both ceilings and both clamp choices, so it relabels the disagreement instead of resolving it. MT.GRADES at missiontypes.js:100 already is the ordered list that report.js:83 and combat.js:114 should read.",
+     "evidenceCheck": "Verified: grade tables at field.js:66, 80-81; sortie.js:27; fieldview.js:30 and test/field.harness.js:12; tokens.js:43; missions.js:59; missiontypes.js:100; bestiary.js:188; report.js:83 and combat.js:114 with 'mythic'/'divine'. Four identical clamps (bonds.js:40, condition.js:56, tactics.js:55, temper.js:108); clamp01 at condition.js:55 and prowess.js:40; capitalise at report.js:12 and spellcraft.js:113; the A+ cap at ai.js:171, tactics.js:90, classes.js:1513 (unclamped) and 1603 (clamped) versus prowess.js:43 using STAGES.length-1; duplicated filter row (filters.js:66-68, 181-214 vs sortie.js:578, 604) and camera axis (fieldview.js:94-100, townview.js:47-53). My Node run confirms every roll at a star tier has the same base total (40/62/92 for 1/3/5 stars), so crew.js:231 'above the roster' encodes stars only.",
+     "demand": "Split. Now: replace the two hand-written tier lists with MT.GRADES and delete the harness TIER_FOR copy (four lines, zero risk). After the build round: the clamp/cap/util.js and filter-row merges one file at a time with the seeded harness diff as the gate. Drop the aptitude-fraction item until the overseer decides which ceiling the Might/Guard axes should use.",
+     "antagonist": "design"
+    },
+    {
+     "id": "cleanup-merge-duplicates",
+     "verdict": "rework",
+     "attack": "Widest footprint (23 files, two HTML load orders, a new util.js) in a folder with no git and a concurrent editor, for no player-visible change and no proposal that adds a grade; the seeded-harness equality check covers field.js and tactics.js only. The grade-table merge collides with systems-field-rating, which is changing what GRADE_POWER/GRADE_HP are for; the clamp merge touches temper.js, condition.js, bonds.js and tactics.js that loop-arcs, will-axis and record edit; the filter-row merge touches the sortie.js party box that loop-readout rewrites.",
+     "evidenceCheck": "Verified the four identical clamp bodies (bonds.js:40, condition.js:56, tactics.js:55, temper.js:108), clamp01 at condition.js:55 and prowess.js:40, cap at report.js:12 and spellcraft.js:113, the camera axis closure at fieldview.js:94-100 and townview.js:47-53 (pad 8 vs 6), GRADE_SIZE tokens.js:43, TIERS missions.js:59, GRADES missiontypes.js:100, GRADE_WORD bestiary.js:188, 'mythic'/'divine' in report.js:83 and combat.js:114 with no species carrying either tier (grep of missions.js), aptitude-fraction sites at ai.js:171-172, classes.js:1513-1514 and 1603-1604, tactics.js:90-92, prowess.js:44, and the filter duplication (filters.js:66-68, 184-214 against sortie.js:578, 604-650, 672-677).",
+     "demand": "1) Cut to two items now: remove 'mythic'/'divine' from the two order lists, and Prof.share() for the aptitude fraction at four call sites with each site's current clamp choice. 2) The grade-table merge is done by the systems-field-rating owner inside that change or not at all. 3) util.js, clamp/cap, camera axis and filter-row merges are deferred past this run. 4) Anything that ships passes `POW=0.6 node test/field.harness.js 40 off on` byte-identical before and after.",
+     "antagonist": "engineering"
+    }
+   ]
+  }
+ ]
+}

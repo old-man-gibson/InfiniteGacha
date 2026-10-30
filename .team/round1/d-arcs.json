@@ -1,0 +1,45 @@
+{
+ "unit": "d-arcs",
+ "title": "Temper drift from events",
+ "overseerSummary": "Measured on combat.js, +/-15 on nerve and grit moves wins from 70.3% to 70.2%: not visible to a player. The events are kept in the service record instead. Leave dropped unless you want it as flavour.",
+ "proposals": [
+  {
+   "id": "loop-arcs",
+   "title": "Carry a map's grief and close calls into the five temper axes",
+   "problem": "Temper is rolled once and never changes, while Tactics.grieve computes a per-map change in resolve and discards it when the map ends.",
+   "evidence": [
+    "temper.js:154-160 ensure() is the only writer of c.temper after roll; tactics.js:425-466 grieve(); field.js:569-596 grieved() writes a.resolve; sortie.js:439-541 settle() does not copy it back",
+    "MEASURED, combat.js runner, 900 sorties per arm, same seeds: nerve and grit of every squad member shifted -15 / 0 / +15 (a shift of 0.3 in the -1..1 tilt, about 4 full-strength maps of drift at the proposed 3 points per map) gives wins 70.3% / 70.1% / 70.2% and deaths 0.268 / 0.298 / 0.298 per sortie; standard error on deaths per sortie is about 0.027, so all three arms are indistinguishable",
+    "MEASURED, same runner: scaling the squad's break-off lines by 0.5 / 1.6 gives wins 70.2% / 69.6% and deaths 0.299 / 0.293 (see loop-readout), so the path through will.broken is also inert",
+    "ai.js:192-193 the loadout signature includes the temper values, so drift would re-plan loadouts at the next launch with no extra work; this is the only mechanical reach identified and it is not exercised by the test above"
+   ],
+   "change": "Not built. Revive only with a design whose effect on combat.js outcomes is measurable (a larger lever than nerve and grit +/-15) and with the events stored once, in loop-record's counters, not in a second c.arc list.",
+   "playerEffect": "None as built. The expressive content the proposal wanted ('saw Bram fall at Goblin Camp') is delivered by loop-record's witnessed and closeCall counters, without writing to the temper axes.",
+   "secondOrder": "Dropping it removes the morale -> resolve -> temper -> will feedback loop that the systems lens's will-axis proposal would otherwise share, and one more writer of temper state.",
+   "files": [],
+   "size": "S",
+   "risks": "None from dropping it. The measurement covers the population in the runner (3-5 star random characters, no gear); a different population could respond differently, which is why the revive condition is stated.",
+   "status": "dropped",
+   "response": "Design attack (inert mechanic, positive feedback, events duplicated in loop-record): upheld and now backed by a combat.js measurement rather than only the attrition harness: -15 / +15 on nerve and grit leave wins at 70.3 / 70.2% and deaths within one standard error. Engineering demand (measure with combat.js directly; shared cap; drop the closest-call nerve term; store {axis, d, missionId, fallenId, at}): the measurement was made and returned no effect, so the shared-cap and storage-format questions do not arise.",
+   "lens": "loop",
+   "verdicts": [
+    {
+     "id": "loop-arcs",
+     "verdict": "kill",
+     "attack": "The builder's own harness shows no measurable change at +/-15 on every axis (wins 77-78%, deaths 0.27-0.30, within noise), so the mechanic is inert and what ships is a sheet line plus two new persistent fields (temperBorn, arc) and a positive feedback loop: hardened characters take more risk, see more deaths, harden further. Temper is 'who somebody is when nobody is giving orders' (temper.js:1-44), rolled once, with names as readings; drifting the axes adds an eleventh writer of state for an effect a player cannot see within a session (bands are 20 wide, the cap is 18, so at most one band flips). The expressive content ('saw Bram fall at Goblin Camp') is already delivered by loop-record's witnessed and closeCall counters without touching the axes, and loop-retreat plus loop-readout make the existing per-map resolve visible and consequential.",
+     "evidenceCheck": "Verified: temper.js:154-160 ensure() is the only axis writer (grep); tactics.js:425-475 reaction/grieve; field.js:571-591 writes a.resolve with a floor; ACTOR_KEYS carries resolve and floor (field.js:1939-1943); settle() copies nothing back (sortie.js:439-541); ai.js:188-193 signature includes temper; band edges at temper.js:51-100. My harness runs (0.28-0.30 deaths/run at POW 0.6, 0.54-0.55 at 0.45) are dominated by mission type, consistent with the builder's 'within noise' result.",
+     "demand": "Revive only with a combat.js measurement (holds at combat.js:401, stand at 449, actLean at 388) showing a deaths-per-run difference at DRIFT_CAP that a player would see within one session, and with the events stored once (in loop-record) rather than in a second c.arc list.",
+     "antagonist": "design"
+    },
+    {
+     "id": "loop-arcs",
+     "verdict": "rework",
+     "attack": "The mechanical effect is unmeasured where it would matter: the harness shows no change at +/-15 and combat.js's temper reads (holds at combat.js:400-408, stand at 440-443, lineScore at 513) are not exercised by it. It stacks with systems-will-axis (resolve seed) and Tactics.grieve (per-map resolve) on the same leave line with no combined cap. Positive feedback is built in: Tactics.reaction's steel term (tactics.js:445-447) hardens the already bold and breaks the already brittle, and the closest-call term also raises nerve, so survivors of bad maps drift bolder, take more risk and die more, bounded only by DRIFT_CAP. c.arc stores free text.",
+     "evidenceCheck": "Verified temper.js:154-160 ensure() is the only writer and grep finds no axis assignment outside temper.js; bands at 17/37/61/81 (temper.js:16-50); tactics.js:425-466 reaction/grieve; field.js:569-596 grieved() writes a.resolve and the floor; 'resolve' and 'floor' are in ACTOR_KEYS; sortie.js:167 passes resolve to the fighter; ai.js:192-193 signature includes temper so a re-plan is free. Harness drift variant not re-run.",
+     "demand": "1) Measure with combat.js directly (same squad, nerve/grit +/-15, N encounters) and report the change in fear-line and stand outcomes; ship only if visible or if the user accepts it as expressive with a smaller cap. 2) One shared cap with systems-will-axis on the combined leave-line shift. 3) Drop the closest-call +nerve term or justify its direction under the permadeath rule. 4) Store arc entries as {axis, d, missionId, fallenId, at} and render words at display time.",
+     "antagonist": "engineering"
+    }
+   ]
+  }
+ ]
+}

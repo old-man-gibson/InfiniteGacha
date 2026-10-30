@@ -1,0 +1,54 @@
+{
+ "unit": "u-meals",
+ "title": "Meals buff the squad for one sortie",
+ "overseerSummary": "Each member eats one meal at launch, best first; the buff lasts that sortie, applies only in the fighter, and is capped below a Masterwork weapon. Your call whether a pre-launch action is wanted; it does wire an existing system into missions.",
+ "proposals": [
+  {
+   "id": "systems-meal-buffs",
+   "title": "Meals buff the person who ate them for one sortie, so kitchen tier and cook quality reach the mission",
+   "problem": "The kitchen chain (farm, crops, cook, meal) produces items whose authored data says 'Higher recipes buff more stats' and rolls a per-stat buff from quality, but nothing in a fight reads it. Eating is pooled by count: one meal in the pantry marks every resting character as fed for FED_REST, whether or not they ate. The kitchen's output therefore has no connection to what a squad can do, and meal quality, recipe and cook aptitude are cosmetic.",
+   "evidence": [
+    "economy.js:191-197 MEALS (porridge CON, stew CON+STR, roast STR+DEX+CON, banquet all six); economy.js:214-218 `buffs: Object.fromEntries(t.buffs.map(b => [b, amount]))` with amount = max(1, round(1.5 x quality mult)): Crude 1, Standard 2, Fine 2, Superior 3, Masterwork 4, Legendary 5.",
+    "game.js:1898 is the only reader of `.buffs` (inventory label). game.js:397-400 pooled eating: one meal in stock sets fedTown for everyone; game.js:549-559 eatMeals takes worst quality first.",
+    "stats.js:134-141 equipBonus feeds Stats.effective (town output, scouting, honing, class fitness all read it) with a cache keyed on base + bonus (stats.js:154-158); combat.js:54 reads Stats.effective once per fighter build. stats.js exports deriveStats (used by sacrifice.js).",
+    "Scratch meals.js, geared mixed squads (fighter, cleric, mage, ranger; Standard/Fine gear in all five slots) over 6 cells (3-5 stars, levels 4-10; goblins, wolves, golems, death knights), 64 combat.js encounters per cell, baseline mean win 0.61. A meal as authored (amount on every listed stat): Fine porridge +13 points of win rate, Masterwork roast +39, Masterwork banquet +40 (six stats at +4); the reference Masterwork sword (+5 STR) is +12 to +16. Noise about +/-4 points.",
+    "Same script, points = K x amount split equally over the meal's listed stats, K = 0.35, win-rate change in points: Masterwork porridge +7.8 (+1.4 CON), stew +6.0, roast +8.6, banquet +3.4; Legendary porridge +8.9, stew +7.8, roast +6.5, banquet +5.2; Fine meals +2.6 to +3.9. Reference Masterwork sword +12.0 in the same run. At K = 0.4 Masterwork porridge was +11.3."
+   ],
+   "change": "1) economy.js: mealPoints(item) = MEAL_K x amount split equally over the keys of item.buffs, MEAL_K = 0.35, amount = the authored per-stat value (all equal). Porridge Masterwork is +1.4 CON; a banquet is +0.23 on each of six stats. 2) condition.js feed(state, chars): at launch, in party order, each character takes one meal from state.inventory, best quality first (the reverse of eatMeals), and gets c.meal = { name, quality, points }; the count is decremented and the launch log lists who ate what. Called from Sortie.launch and Missions.launch. c.meal is deleted for survivors in settle / finish / abandon; it lives on the character, so a reload mid-sortie keeps it. 3) stats.js: withPoints(eff, points) returns { base, derived } with the points added to base and deriveStats applied; it is not cached and effective() is unchanged. 4) combat.js fromCharacter uses withPoints when c.meal exists. Town output, scouting, honing, class fitness and Missions.prepare keep reading Stats.effective. 5) Display: the inventory label (game.js:1898) prints the points from mealPoints ('+1.4 CON for one sortie') instead of the authored amounts; the sheet's Condition section shows 'fed: Masterwork porridge, +1.4 CON until this sortie ends'; the party picker line shows the pantry stock and what each selected member would eat. 6) The resting pantry draw (game.js:397-400, worst first, 0.02 meals per resting character per tick) and FED_REST are unchanged; there is no per-character hunger accrual.",
+   "playerEffect": "Feeding the squad before a contract becomes an action with a visible result: a character who launches with a Fine stew in the pantry goes out with +0.35 STR and +0.35 CON for that sortie, a Masterwork porridge gives +1.4 CON, and the sheet says why. Measured, a Masterwork meal moves a geared squad's win rate by 3 to 9 points against 12 for a Masterwork weapon, so the kitchen matters without replacing the smithy. Kitchen tier, cook aptitude and the farm now convert into combat numbers, and an empty pantry means the squad leaves unfed.",
+   "secondOrder": "The rating in systems-field-rating reads the fighter after the meal, so meals change tactics as well as damage. Launching takes best-first while resting takes worst-first, so launches drain the good meals and the town keeps eating the cheap ones. Crew.demands sizes the kitchen from the resting rate only (crew.js:345-377), so a launch-heavy town will want more cooks; that follows from the same chain without a new rule. Because the buff is applied in combat.js only, it cannot inflate town output or the economy.",
+   "files": [
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\economy.js",
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\condition.js",
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\stats.js",
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\combat.js",
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\game.js",
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\sortie.js",
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\missions.js"
+   ],
+   "size": "M",
+   "risks": "MEAL_K was measured on one composition with a caster and a healer, in six cells, with about 4 points of noise. INT, WIS and CHA points matter little to that squad, so the banquet reads weakest (+3.4 for Masterwork); a caster-heavy check belongs in the headless harness before the K is final. A 4-person party eats 4 meals per sortie against a resting draw of 0.02 per character per tick, so the pantry empties much faster than today; the first harness run should report meals per hour against kitchen output (cooking threshold 20, 5 crops per meal, economy.js:20). Fractional stat points display with one decimal. c.meal must be cleared on every exit path of a run (settle, finish, abandon, a reset), or a stale buff persists.",
+   "status": "reworked",
+   "response": "Design attack, size: the buff is applied in Combat.fromCharacter only, never in Stats.effective, and the points are capped by one constant so a Masterwork meal stays under the Masterwork weapon (3.4 to 8.6 points against 12.0, all under the 10-point limit requested). Town output, scouting, honing and class fitness are untouched and effCache is never involved. Decision: meals are eaten per character at departure from the best meal in the pantry, which makes the player's action 'stock the pantry before launching' instead of an automatic side effect. I did not delete the buffs field: the data is now read by one function and the label is corrected. The per-character hunger accrual is dropped, as requested. Engineering attack: the buff lasts the sortie, not a stocked town's lifetime, so there is no permanent inflation; the cap is below a Fine weapon's single-stat effect for the Fine meals (2.6 to 3.9 points); c.meal is read raw and kept separate from 'geared' so the sheet's lifted styling is not triggered; no town output change; mealPoints and withPoints never call Condition.ensure, so there is no recursion through condition.js:90.",
+   "lens": "systems",
+   "verdicts": [
+    {
+     "id": "systems-meal-buffs",
+     "verdict": "rework",
+     "attack": "The builder's own cells show +2 on all six stats taking a 33% win to 80% and a Masterwork banquet (+4 x 6) to 93%, so an eaten meal outweighs four Masterwork weapons and the split rule is a patch on top. Routing the buff through Stats.effective lifts town output, scouting, honing and class fitness (every reader of effective()), with effCache keyed on base+bonus so any writer outside Condition bypasses invalidation. The player's decision is indirect: meals are eaten automatically by whoever rests, so the choice is still kitchen tier and cook, which exist already.",
+     "evidenceCheck": "Verified: economy.js:191-197 MEALS and 214-218 buffs rolled from quality; game.js:1898 is the only reader of meal buffs (combat.js .buffs are fighter buffs); pooled eating at game.js:396-400 and eatMeals worst-first at 549-559; stats.js:134-141 equipBonus and 154-162 cache. buff_size.js in the scratchpad is a 40-encounter grid carrying the bonus in a fake charm slot, gearless, so the win-rate deltas are plausible but not geared.",
+     "demand": "Either implement with the buff applied in Combat.fromCharacter only, not Stats.effective, capped so a Masterwork banquet moves the harness win rate by at most 10 points, eaten per character at departure from the best meal in the pantry; or delete the buffs field and the inventory label as a cleanup. Do not change the pantry draw to per-character hunger accrual in the same step as the buff.",
+     "antagonist": "design"
+    },
+    {
+     "id": "systems-meal-buffs",
+     "verdict": "rework",
+     "attack": "As specified the buff is permanent, not a decision: MEAL_PER_REST 0.02 (game.js:503) means a resting character eats every 50 ticks and MEAL_TICKS 60 keeps them buffed continuously while the pantry has stock, so a stocked town is flat stat inflation of +1 to +5 across up to six stats (economy.js:216 as authored), which also lifts town output through Stats.effective and marks every fed character as geared (stats.js:161) so the sheet reads 'lifted by what they carry'. The split rule is unmeasured; the 33%-to-80% figure is for +2 on all six. mealBonus inside stats.js must not call Condition.ensure, because condition.js:90 calls Stats.effective.",
+     "evidenceCheck": "Verified economy.js:191-197 MEALS and 214-218 buffs; game.js:1898 is the only .buffs reader; game.js:94-98 pooled eating and 549-559 worst-first; game.js:106 passes fed: fedTown to every Condition.tick; stats.js:134-141 equipBonus and the sig at 154-158. buff_size.js numbers not re-run.",
+     "demand": "1) Make eating a per-sortie event: the squad eats at launch from the pantry, best quality first, one meal each, and the buff lasts that sortie. 2) Cap the total meal bonus below a Fine weapon's single-stat bonus and run the harness with geared squads. 3) Read c.cond.meal raw in stats.js; separate 'fed' from 'geared' in the sheet text. 4) Exclude the meal term from town output or state the economy effect in numbers.",
+     "antagonist": "engineering"
+    }
+   ]
+  }
+ ]
+}

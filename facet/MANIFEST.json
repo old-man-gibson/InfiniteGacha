@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "note": "Vendored byte-identical in both hosts. Both test drivers assert these hashes; the ksgproto28 driver skips the cross-repo comparison when the sibling repo is absent so a fresh clone still passes.",
+  "order": [
+    "facet.core.js",
+    "facet.data.js",
+    "facet.registry.js",
+    "facet.cells.js",
+    "facet.relations.js",
+    "facet.pipeline.js",
+    "facet.gate.js",
+    "facet.mortal.js",
+    "facet.forge.js",
+    "facet.oracle.js",
+    "facet.compile.js",
+    "facet.cases.js"
+  ],
+  "sha256": {
+    "facet.core.js": "84ee6f5b7ad7e9d9e2c638e7283169f27c3d1d1bc6f96dcbc99ed0ad41bf29c8",
+    "facet.data.js": "fcbd31cc484e46115bab76191d1e2ac6080633c0c50e8469be528e1f112d4e59",
+    "facet.registry.js": "76bf7941a61639a174ef5698ff89d94c502e350fd04f820751f67b4185593de6",
+    "facet.cells.js": "45f34dce054177b0b65e038a6c98378f29a0b7aa45375e00dd12769fc526f0de",
+    "facet.pipeline.js": "21f96e0c625c30094583c910c4cf37d60c7e797805f99a53d6be3f43c6f516df",
+    "facet.gate.js": "549c864ff0af218cc5a1572e65718b521b0cba06ecbe334e3d2f417f5550d009",
+    "facet.mortal.js": "738bef83bf0734a5583fb7de51740e60f42a348bbd514caa5dfed89e03add396",
+    "facet.forge.js": "39962cffe1c1c003bdd052affb9508590e1fb9462d9a59832c46f3d4a4d9feaf",
+    "facet.oracle.js": "f6b36d39a55ece29ca3c8a0a4dc64f3a4e587aa0cda3e363c8a76d444783258e",
+    "facet.compile.js": "6f0e838c6dba5a667e392076348792bcf63e45b9b4416ceec4b92eb2a4223a71",
+    "facet.cases.js": "c75b518920cab60f4e2cd3e04c5152ce06a6ca0ecab23e08684868f24cd0c522",
+    "facet.relations.js": "be4addc824672329de6ec6a92347fe0f8fc7b686b73502b52e57f11d03b2a0ea"
+  }
+}

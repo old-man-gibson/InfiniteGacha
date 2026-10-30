@@ -1,0 +1,55 @@
+{
+ "unit": "u-savestore",
+ "title": "Save undo and visible failures",
+ "overseerSummary": "Includes both antagonists' demands: Reset also forgets the live sortie, the rollback is dropped on a quota failure, and a Node test covers it.",
+ "proposals": [
+  {
+   "id": "cleanup-silent-failures",
+   "title": "Give the save undo a control, and replace silent failures with a message",
+   "problem": "The import dialog says the replaced save is 'kept, one undo deep', but no control restores it: the rollback key is written and never read. Reset save wipes without keeping anything, and it does not stop a sortie that is running against the old state object. If catalog.json cannot be fetched (game.html opened from disk, or the file missing), init() rejects before any tab handler is attached and the page shows nothing and says nothing. save() swallows storage errors, so a full or blocked store loses progress with no indication.",
+   "evidence": [
+    "game.js:198-210 importSave writes SAVE_KEY + '.rollback' (line 202); game.js:212 hasRollback has no caller; grep -n rollback over all .js finds only those lines.",
+    "game.js:2602 import dialog text: 'The save this replaces is kept, one undo deep, until the next import.'",
+    "game.js:2679-2681 Reset: state = newState(); save(); nothing kept. sortie.js:294-304 persist() and settle() use run.gs, the old state object; nothing in the Reset path stops the timer, so the run keeps ticking, settle() pays gems into the dead object and writes its log into the new state (Sortie.forget, sortie.js:306, only deletes gs.field.run and does not stop the clock).",
+    "game.js:2648-2650 init() awaits LPC.loadCatalog() and Bestiary.loadIndex(); lpc.js:425-428 loadCatalog has no try/catch; game.js:2722 calls init() with no catch. Opened from disk fetch rejects and #content stays empty.",
+    "game.js:36-39 save(): catch (e) { /* ignore */ }; game.js:2703 is the only writer of the #tick text.",
+    "game.js:31-35 documents the failure that `frozen` prevents (the tick writing the old state back over an imported key); sortie.js beforeunload/visibilitychange call persist(true), which calls G().save(), so any key swap must set frozen first.",
+    "Measured save size 3.0 KB per character (182 KB at 60 characters), so one extra copy fits the usual 5 MB quota."
+   ],
+   "change": "1) New savestore.js (about 50 lines, IIFE, window.SaveStore and module.exports) holding the two slots over any Storage-like object: replace(storage, key, text) (current becomes rollback, text becomes current; on a quota error returns { ok: false } and leaves the current save as it was), restore(storage, key) (swaps current and rollback, so a restore is itself undoable), wipe(storage, key) (current becomes rollback, current removed; a failed rollback write never blocks the wipe), hasRollback(storage, key). game.js importSave, the Reset handler and the new restore control call it; this is what makes a Node test possible, since game.js cannot be required.\n2) openSavePanel (game.js:2535): when a rollback exists, both modes show 'Previous save: N characters, M on the memorial, <town>, G gems' (existing saveSummary/parseSave) and an armed 'Restore previous save' button (arm(), as at game.js:2679). Restore sets frozen = true, calls SaveStore.restore, then location.reload().\n3) Reset: before the wipe it calls Sortie.discard() (new, exported next to forget at sortie.js:1387: stop(), run = null, forget(), render(), no settlement), then SaveStore.wipe, then continues as now. The arm text stays 'Wipe everything?'; the panel row above is the undo.\n4) init(): wrap the awaited loads in try/catch; on failure write one paragraph into #content: 'catalog.json could not be loaded: <error>. Serve this folder over http (for example: python -m http.server) instead of opening the file directly.'\n5) save(): on a storage error remove the rollback key and retry once (the live save outranks the undo copy); if it still fails set a module-level saveError; the 500 ms writer of #tick appends ' - save failed: <error name>' while it is set and clears it after the next successful write.\n6) New test/savestore.js with a Map-backed storage stub: replace then restore reproduces the original save byte for byte; restore twice returns to the replaced save; quota on the new write leaves the current save untouched; quota on the rollback write during wipe still wipes; hasRollback is false after a successful restore of an empty rollback.",
+   "playerEffect": "A wrong import or an accidental reset can be undone from the panel that warns about it. A player who double-clicks game.html is told what to do instead of seeing an empty shell. A full browser store is visible in the header instead of surfacing later as lost progress. Reset during a sortie no longer leaves a run ticking for characters that no longer exist.",
+   "secondOrder": "Reset is no longer irreversible, so the 'Wipe everything?' confirmation protects against misclicks, not data loss. Stored bytes roughly double while a rollback exists; the save() retry drops the rollback first when space runs out. Any later feature that adds a save-time action (autosave slots, export reminders) has one module to extend.",
+   "files": [
+    "savestore.js",
+    "game.js",
+    "game.html",
+    "sortie.js",
+    "lpc.js",
+    "test/savestore.js"
+   ],
+   "size": "M",
+   "risks": "Restore reloads the page, so frozen must be set before the swap or the tick and sortie persist(true) write the old state back (the failure importSave already documents). Sortie.discard drops a live run without paying or freeing characters on the old state; that is intended because the whole state is being replaced, but it is a new exported function. A very large roster can fail the rollback write; the design accepts that (no undo) instead of failing the wipe.",
+   "status": "reworked",
+   "response": "Design attack (quota, restore without frozen): accepted, both handled in items 1, 2 and 5 and in the test. Engineering demand 1 (Reset leaves the run ticking against the old state): verified in the code (persist and settle both use run.gs, Reset replaces `state`) and added as Sortie.discard(). Demand 2 (drop the rollback on quota): added to save() and wipe. Demand 3 (Node test with a storage stub): needs game.js logic outside game.js, so the slots move to savestore.js; the original plan to test importSave directly was not possible because game.js is an IIFE over the DOM.",
+   "lens": "cleanup",
+   "verdicts": [
+    {
+     "id": "cleanup-silent-failures",
+     "verdict": "keep",
+     "attack": "Two copies of the save in localStorage can hit quota on large rosters, and a restore that reloads without setting frozen writes the old state back over the restored key (the failure importSave already documents at game.js:31-34). Beyond that there is no design case against it: it makes an existing UI promise true.",
+     "evidenceCheck": "Verified: game.js:202 writes the rollback key; 212 hasRollback has no caller (grep); 2602 import dialog text; 2679-2681 reset with no rollback; 2648-2650 init awaits LPC.loadCatalog and lpc.js:425-428 has no try/catch; game.js:2722 calls init() with no catch; game.js:38 save() swallows errors.",
+     "demand": "Restore swaps keys under frozen = true and drops the rollback when the main write fails. The init() failure text names catalog.json and the http server command. The #tick indicator clears on the next successful save. A Node test with a localStorage stub that import then restore reproduces the original bytes.",
+     "antagonist": "design"
+    },
+    {
+     "id": "cleanup-silent-failures",
+     "verdict": "keep",
+     "attack": "Stored bytes double while a rollback exists; restore must set frozen before reload or the tick and sortie persist(true) write the old state back (game.js:31-35, sortie.js:1401-1402); reset with a live sortie leaves the run ticking against run.gs, the old state object, which the proposal does not address.",
+     "evidenceCheck": "Verified game.js:202 writes the rollback key and 212 hasRollback has no caller (grep: lines 196, 202, 212 only); 2602 dialog text; 2679-2681 reset wipes with no copy; init() 2648-2649 awaits LPC.loadCatalog (lpc.js:425-428, no try/catch) and 2722 calls init() with no catch; save() swallows at game.js:38; the #tick writer is at game.js:2703.",
+     "demand": "1) Reset also calls Sortie.forget() and stops the clock so no run outlives its state. 2) Drop the rollback key when the main write hits quota. 3) The Node test with a localStorage stub as proposed.",
+     "antagonist": "engineering"
+    }
+   ]
+  }
+ ]
+}

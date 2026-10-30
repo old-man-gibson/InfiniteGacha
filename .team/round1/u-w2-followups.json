@@ -1,0 +1,42 @@
+{
+  "unit": "u-w2-followups",
+  "title": "Wave 2 follow-ups the review and the overseer found",
+  "overseerSummary": "Five defects found by the wave 2 antagonists, the wave 2 builders and the overseer's browser check. Full wave 2 output: .team/round1/wave2-output.json.",
+  "items": [
+    {
+      "id": "descend-dead",
+      "files": ["field.js", "sortie.js"],
+      "severity": "permadeath loophole",
+      "problem": "field.js descend() (around field.js:1817) carries only living squad actors to the next floor: `const carried = s.actors.filter(a => a.alive && isOurs(a))`, then `s.actors = carried`. A squad member who died on an earlier floor no longer has an actor, so sortie.js release() finds no actor for that character and frees them alive, with no memorial entry and no grief. Reported by the u-w1-followups fixer.",
+      "change": "A death on any floor must reach the single death path. Either keep dead squad actors across descend (and make sure nothing else treats them as present), or record the dead ids on the run before they are dropped and have release() fall them. Add a test in test/retreat.js or test/debrief.js: a squad member killed on floor 1 of a dungeon that then descends is on the memorial after settle, after a call-off, and after a retreat."
+    },
+    {
+      "id": "retreat-loop",
+      "files": ["tactics.js", "field.js"],
+      "severity": "regression made reachable by u-rating",
+      "problem": "tactics.js closing() (around tactics.js:224-232) counts any spotted, unengaged hostile within NEAR=14 as closing, whatever its goal. A guard with goal null that never moves therefore keeps restarting a 'retreat' detail: propose() starts it when oddsHere < HOPELESS, it ends 12 s later when closing() is empty, the squad walks back, and it starts again (175 retreat plays in one dungeon run, seed 6155498 L6). u-rating added a cap in field.js replan() that bounds it but does not remove the cause.",
+      "change": "closing() counts only hostiles that are moving toward the squad (hunting, alarmed, or with a goal at a squad member), not a stationary guard. Keep the replan cap only if it still does something after the fix; otherwise remove it. Measure loops per run (the 'loops' column of test/field.harness.js) and retreat plays per run on test/sortie.harness.js before and after, including dungeon and raid."
+    },
+    {
+      "id": "gate-cause",
+      "files": ["missions.js", "test/ledger.js"],
+      "severity": "spec miss",
+      "problem": "Missions.finish passes `{ cause: mission.name }` to Roster.fallAll (around missions.js:401), so a Gate death on the memorial reads only the zone name, while a contract death reads '<mission>: <killer>'. Gate fight blocks already carry falls.",
+      "change": "cause: (c) => (typeof Bestiary !== 'undefined' ? Bestiary.causeOf(state, run, c.id, mission.name) : mission.name). Add a Gate scenario to test/ledger.js. Keep test/debrief.js's existing assertion valid or update it with a stated reason."
+    },
+    {
+      "id": "one-contact",
+      "files": ["sortie.js", "field.js", "test/retreat.js"],
+      "severity": "consistency",
+      "problem": "sortie.js has two definitions of contact: untouched() reads r.contact (set at the first resolved fight) and exitState() uses Field.contacted(s) (a fight opened or a hostile has spotted the squad). Between a sighting and the first fight they disagree about whether a call-off is free and whether it debriefs.",
+      "change": "One definition, Field.contacted(s), used by both. State in the UI text which event ends the free call-off. Extend test/retreat.js with the sighted-but-no-fight case."
+    },
+    {
+      "id": "one-wound-eta",
+      "files": ["condition.js", "sortie.js", "game.js", "missions.js"],
+      "severity": "numbers must be traceable",
+      "problem": "Found in the browser: the same wounded character shows 'recovering (13 ticks)' on the roster tile and the sheet, 'Recovering, back in 13' on the picker card, and 'recovering, back in 11 ticks' / '1 recovering, first back in 11 ticks' in the party box. 13 is the raw c.injured counter and 11 is the rest-adjusted estimate. The party box line also reads 'stamina and pool ready in 2 ticks (stamina)'. The antagonist also flagged explainWound's 'healing 1.81 per tick (rest x1.45 x1.25 with meals)' as not derivable.",
+      "change": "One figure everywhere: the ticks until the character can go out, from Condition.readyIn with the character's real rest rate. Where the healing rate is shown, show its factors with their sources named (bed tier, fed) so the product can be checked. Rewrite the readiness line in plain words ('ready in 2 ticks: stamina'). Grep for every place that prints injured and route it through one function."
+    }
+  ]
+}

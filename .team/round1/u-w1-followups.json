@@ -1,0 +1,25 @@
+{
+  "unit": "u-w1-followups",
+  "title": "Wave 1 follow-ups the review found",
+  "overseerSummary": "Small fixes the wave 1 antagonists and builders found that fell outside a lock.",
+  "items": [
+    {
+      "id": "boot-null",
+      "file": "test/game.boot.js",
+      "problem": "The stub's document.getElementById (around test/game.boot.js:336, `(id) => lookup('#' + id)`) returns a stand-in element for ids that are not in the page, where a browser returns null. lpc.js:499 `if (document.getElementById('roll')) init();` therefore runs the sprite generator page's init() inside every game.html boot under the harness. test/savestore.js filters one 'async init (lpc.js' rejection because of it.",
+      "change": "getElementById returns null for an id that does not exist in the parsed page (the stub already knows the page's ids from game.html). Keep the stand-in behaviour for querySelector if other code relies on it, but record it as now. Then remove the lpc.js rejection filter from test/savestore.js if it is no longer needed, and confirm every test that boots the game still passes."
+    },
+    {
+      "id": "lifecycle-stubs",
+      "file": "test/lifecycle.js",
+      "problem": "test/lifecycle.js:45 stubs `loadSprites: async () => {}` on its FieldView stand-in, which nothing calls since u-art removed loadSprites. test/lifecycle.js:39 inlines the grade-to-tier map `{ basic, veteran, elite, ancient: 'elite', legendary }`, a third copy of what u-dupes centralised as MissionTypes.SPECIES_TIER.",
+      "change": "Delete the loadSprites stub; read MissionTypes.SPECIES_TIER in the namer stub."
+    },
+    {
+      "id": "prowess-profs",
+      "file": "martial.js",
+      "problem": "Prowess.of throws for a character with no profs table: martial.js:113 reads c.profs[k] unguarded. test/aptitude.snapshot.js skips Prowess for that case.",
+      "change": "Guard the read so a missing profs table counts as no aptitude, matching how proficiency.js treats a missing entry. Remove the skip in test/aptitude.snapshot.js and confirm the snapshot digest is unchanged for characters that do have profs."
+    }
+  ]
+}

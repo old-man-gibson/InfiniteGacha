@@ -1,0 +1,166 @@
+
+==============================================================================
+  1-STAR   budget 14 points
+==============================================================================
+
+🜃  Patient Stance
+    13.0 pts   exclusive   about stat:wis   (borne by a orc, blade)
+    Two stances               one or the other, never both, and switching takes a moment
+    Always (while charged)    +47% crit damage
+    Always (while charged)    -80% incoming damage after resistance
+    seed 629081758  id fc_33fb8e
+
+⟡  Measured Reckoning
+    13.7 pts   escalate   about temper:rigor   (borne by a human, arcana)
+    Builds on fight start     stronger each time, and each time it costs more
+    Fight start               freeze nerve [enemy]
+    Always (while charged)    +200% to the morale ceiling | 7.2 light dmg [all enemies]
+    Always (while charged)    scaled earth resistance   (drawback)
+    Fight start (56%)         -34% mana (current)   (drawback)
+    seed 4168731652  id fc_36e741
+
+⟡  Close Gift
+    15.2 pts   trade   about weapon:dagger   (borne by a elf, psionics)
+    While badly hurt          and the worse it gets the stronger it is
+    Always (when hurt)        +90% slashing resistance | +40% to the morale ceiling
+    seed 463719586  id fc_b5cfb0
+
+==============================================================================
+  2-STAR   budget 22 points
+==============================================================================
+
+🧠  Inward Reckoning
+    19.9 pts   chain(veil)   about path:psionics   (borne by a human, psionics)
+    On on parry               and what it takes feeds what it gives
+      ↳ On on dodge           sometimes — and it is luckier than it lets on
+    On dodge                  +500% light resistance
+    On dodge (50%)            40 light dmg [all enemies]
+    On parry                  +500% water resistance | -73% incoming damage by absorbing
+    Always (while charged)    +500% wis
+    seed 866039165  id fc_636568
+
+☀️  Seen Reckoning
+    15.0 pts   mirror(escalate)   about element:light   (borne by a celestial, arcana+psionics)
+    On on death               it goes back the way it came
+      ↳ Builds on on parry    stronger each time, and each time it costs more
+    Always (while charged)    +500% hp | +398% min damage
+    Always (while charged)    scaled parry   (drawback)
+    On death                  = the blow light dmg [all enemies] | reflect 2.0 light
+    seed 1858163386  id fc_829224
+
+🪨  Buried Face
+    15.2 pts   nth(exclusive)   about element:earth   (borne by a dwarf, arcana+blade)
+    Every 4th on dodge        and only then
+      ↳ Two stances           one or the other, never both, and switching takes a moment
+    Always (while charged)    -50% incoming damage after resistance
+    Always (while charged)    -66% incoming damage past armour
+    When full                 4.4 earth dmg [all enemies]
+    Always                    -30% max hp mult   (drawback)
+    seed 3050774124  id fc_ff4532
+
+==============================================================================
+  3-STAR   budget 34 points
+==============================================================================
+
+🪨  Unmoved Bellows
+    32.0 pts   trade(until)   about element:earth   (borne by a halfgiant, blade)
+    While badly hurt          and the worse it gets the stronger it is
+      ↳ Fills on when hit     at the brim, it all comes back out
+    When hit                  -95% incoming damage through the ward
+    When full                 = stored earth dmg [all enemies] | -95% grit [enemy]
+    Always (when hurt)        +500% poison resistance | +10% bludgeoning resistance
+    seed 2062818411  id fc_aa61ce
+
+❖  Levelled Reckoning
+    32.7 pts   escalate   about weapon:spear   (borne by a android, psionics)
+    Builds on in town         stronger each time, and each time it costs more
+    Always (while charged)    -95% incoming damage through the ward | sever a random enemy stat + downstream [enemy] | 7.8 water dmg [all enemies]
+    Always (while charged)    scaled reserve left   (drawback)
+    seed 1264322871  id fc_03a60d
+
+◈  Doubled Debt
+    20.1 pts   escalate   about temper:guile   (borne by a robot, blade)
+    Builds on on parry        stronger each time, and each time it costs more
+    On parry                  +500% magic damage | +90% parry
+    Always (while charged)    +200% to the morale ceiling | +500% ward | +188% mana (current)
+    Always (while charged)    scaled crit chance   (drawback)
+    seed 3670220272  id fc_2f9506
+
+==============================================================================
+  4-STAR   budget 52 points
+==============================================================================
+
+🜃  Worn Stance
+    43.2 pts   exclusive(trade(chain))   about temper:grit   (borne by a demonic, psionics)
+    Two stances               one or the other, never both, and switching takes a moment
+      ↳ While badly hurt      and the worse it gets the stronger it is
+      ↳ On on kill            and what it takes feeds what it gives
+    On kill                   +500% crit damage
+    Always (while charged)    +90% piercing resistance
+    Always (when hurt)        -94% incoming damage past armour
+    Always (while charged)    -92% incoming damage past armour
+    Always (while charged)    +90% physical resist
+    On kill (41%)             -38% appetite   (drawback)
+    seed 2164860274  id fc_60abf9
+
+⚔️  Practised Face
+    38.0 pts   exclusive(exclusive(toll,convert))   about path:blade   (borne by a goblin, blade)
+    Two stances               one or the other, never both, and switching takes a moment
+      ↳ Two stances           one or the other, never both, and switching takes a moment
+      ↳ On on kill            and every use makes the next one cost more, for the rest of the road
+      ↳ Runs on earth resistance  and stops working when that is gone
+    On kill                   40 cold dmg [all enemies]
+    Always (while charged)    scaled focus (current)   (drawback)
+    Fight start               +500% splash
+    Fight start               -5% earth resistance   (drawback)
+    Always (while charged)    2.0 dark dmg/tick
+    Always (while charged)    reflect 2.0 slashing
+    Always (while charged)    -67% wind resistance [enemy]
+    Always (while charged)    +115% to the morale ceiling
+    seed 3120721931  id fc_22728f
+
+❖  Sunken Mark
+    42.9 pts   trade   about stat:con   (borne by a draconic, arcana)
+    While badly hurt          and the worse it gets the stronger it is
+    Always (when hurt)        2.0 light dmg/tick | +90% dodge | -93% incoming damage after resistance
+    In town                   -14% willpower   (drawback)
+    seed 761110096  id fc_b1965c
+
+==============================================================================
+  5-STAR   budget 78 points
+==============================================================================
+
+🌬️  Wandering Cistern
+    50.9 pts   veil(chain(until,until))   about element:wind   (borne by a elf, psionics)
+    On in town                sometimes — and it is luckier than it lets on
+      ↳ On when hit           and what it takes feeds what it gives
+      ↳ Fills on on crit      at the brim, it all comes back out
+      ↳ Fills on on dodge     at the brim, it all comes back out
+    When full                 = stored wind dmg [all enemies]
+    When full                 = stored wind dmg [all enemies]
+    When hit                  +300% dodge
+    Always (while charged)    +500% morale
+    In town (50%)             40 wind dmg [all enemies]
+    seed 3612941692  id fc_9eec25
+
+🧠  Wordless Score
+    49.0 pts   nth(trade(nth))   about path:psionics   (borne by a goblin, psionics)
+    Every 5th on death        and only then
+      ↳ While badly hurt      and the worse it gets the stronger it is
+      ↳ Every 4th on crit     and only then
+    When full                 40 bludgeoning dmg [all enemies]
+    Always (when hurt)        -76% incoming damage before anything
+    When full                 40 arcane dmg [all enemies]
+    On death                  -19% lightning resistance   (drawback)
+    seed 2186343510  id fc_c7580d
+
+⟡  Quick Toll
+    47.5 pts   mirror(trade(nth))   about trait:quicklearner   (borne by a darkelf, arcana+psionics)
+    On fight start            it goes back the way it came
+      ↳ While badly hurt      and the worse it gets the stronger it is
+      ↳ Every 5th on dodge    and only then
+    On dodge                  +200% to the morale ceiling
+    When full                 40 water dmg [all enemies]
+    Always (when hurt)        95% heat resist | +63% splash
+    Fight start               = the blow bludgeoning dmg [all enemies]
+    seed 4101990085  id fc_ce077a

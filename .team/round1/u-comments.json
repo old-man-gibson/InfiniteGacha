@@ -1,0 +1,53 @@
+{
+ "unit": "u-comments",
+ "title": "Comment register and lint",
+ "overseerSummary": "Zero behaviour change. Low priority; it touches 21 files, so it runs alone at the end of wave 1.",
+ "proposals": [
+  {
+   "id": "cleanup-comment-register",
+   "title": "Comments in the engineering register, with a lint test that keeps them there",
+   "problem": "Code comments in game-owned files still use the register the user has rejected twice: shouted maxim lead-ins, personification and aphorism. One comment contains the exact sentence the memory file quotes as a banned example, and four comments state something the code contradicts or use class names that no longer exist.",
+   "evidence": [
+    "Lead-ins of 15 or more capitals followed by a full stop or colon: 66 in 20 files outside facet/, generator and vendor (field.js 16, potential.js 6, game.js 4, then temper, sortie, quests, missiontypes, combat, classes, bonds with 3 each). Examples: field.js:1582 'A HARDCORE CONTRACT HAS A CLOCK EVEN WHEN ITS TYPE DOES NOT.', field.js:1594 'THE PAPER DOES NOT CARE HOW IT FELT.', sortie.js:427 'WHAT HOLDING ON IS WORTH.', missiontypes.js:985 'THE CLOCK NO LONGER KILLS ANYBODY.', game.js:1643 'NOTHING DRAINS GEMS.'",
+    "grep -n -i -E 'whole point|is the point|not a detail|a promise|silently|quietly' over game-owned .js and .html (excluding facet/ and generator): 35 matches in 18 files (field 6, game 5, crew 4, sacrifice 3). Not every match is wrong; each needs reading.",
+    "combat.js:34-37: 'a mortality bound that silently does nothing is a promise this code has made to the player and broken', the sentence quoted as banned in ui-prose-engineer-style.md; its stated replacement is 'Facet.install throws instead of warning, because a silent failure here disables the damage bound'.",
+    "crew.js:322 header says '2. GEMS maintenance, sized to what a town this big and this tall costs to keep'; crew.js:383 says 'this one is INCOME rather than a bill. Nothing drains gems on a tick' and game.js:1643-1645 says 'NOTHING DRAINS GEMS'; numbers-must-be-traceable.md names the bill wording as the trap.",
+    "condition.js:24-27 says 'Nothing here reaches into a fight: combat.js has its own per-encounter pools and always did'; combat.js:80-88 reads co.staminaFrac(c) and co.poolFrac(c) when it builds a fighter's pools.",
+    "psionic.js:212 'a Temporizer has speed and clairvoyance' (the class is chronokinetic since classes.js LEGACY_IDS); classes.js:1105 doc example 'an Adept Killer' (the class is butcher)."
+   ],
+   "change": "1) Rewrite the four contradicting or stale comments: combat.js:34-37 to 'Facet.install throws instead of warning, because a silent failure here disables the damage bound'; crew.js:322 to 'GEMS income target (a savings rate; nothing drains gems)'; condition.js:24-27 to say combat.js reads staminaFrac and poolFrac when it builds a fighter's pools; psionic.js:212 and classes.js:1105 use current class names.\n2) Replace each of the 66 shouted lead-ins with a plain topic sentence that states the mechanism and keeps every fact that followed (for example field.js:1594 becomes 'Terms are read before the withdrawal flag: a squad that withdrew but met the terms has completed the job'). No code line changes.\n3) Read each of the 35 pattern matches and rewrite those that are metaphor or aphorism; keep the ones that describe a real silent failure.\n4) New test/register.js (Node): fails on a comment line in game-owned .js files that matches a lead-in of 15 or more capitals or one of the six phrases above, with an allowlist for facet/, vendor/, test/ and generator files; prints file:line.\n5) Edit one file at a time, re-reading the file immediately before each edit because another session edits this folder. Do not touch facet/*.js (pinned by facet/MANIFEST.json).",
+   "playerEffect": "No change in play. Whoever reads or extends the code finds the same register as the class text, and the lint test stops it from drifting back.",
+   "secondOrder": "The lint test gives later builders an immediate failure instead of a review comment. Comments that now say how combat reads fatigue and what crew gems mean agree with the code and with the UI.",
+   "files": [
+    "combat.js",
+    "crew.js",
+    "condition.js",
+    "psionic.js",
+    "classes.js",
+    "field.js",
+    "potential.js",
+    "game.js",
+    "temper.js",
+    "sortie.js",
+    "quests.js",
+    "missiontypes.js",
+    "bonds.js",
+    "townmap.js",
+    "prowess.js",
+    "lodging.js",
+    "tactics.js",
+    "ai.js",
+    "sacrifice.js",
+    "roster.js",
+    "names.js",
+    "test/register.js"
+   ],
+   "size": "M",
+   "risks": "Comment-only edits carry no behaviour risk, but 20 files overlap other builders' edits; apply at the end of the round, or per file immediately after its owner finishes. A careless rewrite could drop a fact from a comment; the rule is to keep every fact.",
+   "status": "reworked",
+   "response": "Split out of cleanup-register-pass as the engineering attacker demanded: this part ships with zero behaviour change. Design demand to fix condition.js:24-27 (a contradiction the first pass missed): verified against combat.js:80-88 and added. The pattern counts are re-measured today: 35 matches in 18 files for the phrase list (not 28 in 13, because files changed and generator is excluded) and 66 shouted lead-ins, which the first pass did not count and which are the larger share of the problem.",
+   "lens": "cleanup",
+   "verdicts": []
+  }
+ ]
+}

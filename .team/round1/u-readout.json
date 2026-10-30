@@ -1,0 +1,56 @@
+{
+ "unit": "u-readout",
+ "title": "Party readout before and during a run",
+ "overseerSummary": "Words and counts only: temper reading before launch, role mix, the closest pair in Bonds words, and a live list of who is hurt. The odds line and break-off number were dropped after the builder measured that the break-off line has no effect on outcomes.",
+ "proposals": [
+  {
+   "id": "loop-readout",
+   "title": "Show squad composition and a live squad list; drop the break-off line and the odds line",
+   "problem": "Choosing who goes together is done by opening individual sheets and guessing, and the party box shows only name, stars, race and scouting. During a run the panel shows 'N/M standing' but nothing about who is hurt, so there is no basis for deciding when to order a retreat or whom to send next time. The temper reading (Temper.readParty) is computed at launch and only written to the log afterwards.",
+   "evidence": [
+    "sortie.js:234 Temper.will(chars) passed to F.start; sortie.js:246-247 Temper.readParty written to the log only after launch",
+    "sortie.js:1018-1046 party box header shows only the scouting tier; each card shows name, stars, race, scouting",
+    "sortie.js renderSide() (tally line near 1318-1322) prints '{alive}/{partySize} standing', foes left, % scouted; no per-member HP",
+    "sortie.js:182 resolve() sets a.hp = a.fighter.hp when a fight opens, so HP read during playback already includes the fight's outcome; a list must show 'in a fight' for a.engaged members to avoid spoiling deaths",
+    "outfit.js:36-52 roleOf(c); outfit.js:27-33 ROLES (frontline, caster, assassin, ranged, support); bonds.js:260-269 describe() returns tier word and mission count (state, a, b)",
+    "temper.js:338-352 will(): crew and hp lines both equal a constant times scale = BEAR / bear(mood), clamped; so one scalar sets the whole break-off line",
+    "MEASURED, 4000 random 4-person squads: the standing count at which a squad leaves is 'one or fewer' in 86%, 'two or fewer' in 10%, 'zero' in 3.5%; the crew line is the same integer for most squads, so printing it would not distinguish squads",
+    "MEASURED, combat.js runner, 900 sorties per arm: scaling will.broken by 0.5 / 1.0 / 1.6 gives wins 70.2% / 70.1% / 69.6% and deaths 0.299 / 0.298 / 0.293 per sortie; the break-off line has no measurable effect on outcome in this population",
+    "MEASURED, same runner: pair bonds -40 / 0 / +60 for every pair give wins 69.9% / 70.1% / 69.9% and deaths 0.298 / 0.298 / 0.297; bonds affect the aftermath (grief, bond events, cohesion bonus), not the fight outcome in the field (tactics plays fire about 0.07 times per run)",
+    "MEASURED, same runner (roles from Outfit.roleOf): squads with a support role win 74.3% (n=343) vs 67.5% (n=557), 0.277 vs 0.311 deaths per sortie; with a Cleric class 74.9% vs 67.3%; with an Alchemist class 0.398 vs 0.260 deaths per sortie. About 2 standard errors, so composition matters modestly.",
+    "MEASURED, Temper.readParty over 6000 random squads: 'ordinary' for 0.2%, the other 99.8% spread over 25 words; Temper.will voice is set for 75%",
+    "field.js:2059 default actor power is 4 for every squad member (sortie.js passes no power), so Field.odds is hp-weighted only; the 'squad's read' line would not track the real fight",
+    "game.js:1188-1191 comment: temper numbers are kept out of the UI on purpose"
+   ],
+   "change": "1. Pre-launch block in the party box (sortie.js:1018-1046), computed from the picked characters, words only:\n   a. Temper.readParty(picked) word and note (moved from the post-launch log; the log line stays).\n   b. Role mix from Outfit.roleOf as counts ('2 frontline, 1 ranged, 1 support'). States composition; makes no claim about its effect.\n   c. The closest pair among the picked, as Bonds.describe text ('Kess and Bram: close, 6 missions together'). Shown only when a pair reaches a tier word above neutral.\n   d. Existing scouting line and, for an active team, the cohesion line (Crew.cohesion) stay.\n2. Live squad list in the run side panel (renderSide), under the tally: one row per squad member: name, role icon, HP percent of those not engaged, 'in a fight' for a.engaged members, 'down' or 'out' otherwise. This is the information the retreat order is decided on.\n3. Not built: the numeric or hover break-off line, and the Field.odds 'squad's read' line. A one-word stay-reading from the scalar in temper.js:338-343 can be added later if a measurement shows it changes outcomes; none does today.\n4. Test: a Node test that the list shows 'in a fight' for engaged actors and never prints HP computed from a mid-playback fighter.",
+   "playerEffect": "Party selection becomes a comparison of composition and the squad's temper word before launch, using values the player can check on the sheets. During a run the player sees which members are hurt between fights, which is what a retreat decision needs. The change does not claim that bonds or the break-off line alter fights, because the measurements say they do not.",
+   "secondOrder": "Supplies the information loop-retreat needs; without it the order is a guess. Temper words that today appear only on the sheet start to matter at the selection screen. The role mix surfaces the one composition effect that measured above noise (a support role). A grief preview line ('Kess would take a loss hard') can be added once loop-record's Bonds.grief helper exists, which would give bonds a visible pre-launch consequence without implying a fight effect. Reports (loop-ledger) can show the squad list at the first fall.",
+   "files": [
+    "sortie.js"
+   ],
+   "size": "S",
+   "risks": "Role counts invite optimisation toward a support role; the measured difference is about 7 points of win rate at 2 standard errors from random class assignment and should be re-measured at 3000 sorties before any UI text states an effect. Showing HP per member is accurate only between fights; engaged members must read 'in a fight' (resolve() applies the outcome when the fight opens). The party box and picker cards in sortie.js (975-1093) are also edited by the cohesion proposal and the will-axis proposal from the systems lens; one owner for that region.",
+   "status": "reworked",
+   "response": "Design attack (item 1a prints a derived number the player cannot trace; hover fraction is still a number): accepted and went further: measurement shows the break-off line has no effect on outcomes (wins 70.2 / 70.1 / 69.6% at x0.5 / x1 / x1.6) and does not distinguish squads (86% share the same integer), so it is removed rather than replaced by a three-band word. Design attack (Field.odds is saturated because every member has power 4): confirmed at field.js:2059; the odds line is dropped. Design demand (ship role mix, pair words, readParty before launch, live standing/HP block; one owner for renderBoard): accepted; the pair line is shown only above a neutral tier and the roster list replaces the average-HP figure. Engineering demand 1-4 (drop live odds, band word for thresholds, live standing/avg HP only, Node test): drop and test accepted; the band word is not built because the underlying scalar has no measured effect. Size lowered from M to S because the numeric block and odds line are gone.",
+   "lens": "loop",
+   "verdicts": [
+    {
+     "id": "loop-readout",
+     "verdict": "rework",
+     "attack": "Item 1a prints a derived number ('breaks off when 2 or fewer of 4 are standing') that the player cannot trace to anything they can click: it is five hidden axes through temper.js:338-343, which fails numbers-must-be-traceable and undoes the decision at game.js:1188-1191 to keep temper out of the UI as numbers (the hover fraction is the number). Item 2's 'squad's read of the next fight' is Field.odds, which systems-field-rating shows is nearly uncorrelated with real outcomes because every squad member has power 4 (field.js:2059); printing it teaches the player to trust a wrong figure.",
+     "evidenceCheck": "Verified: Temper.will passed at sortie.js:234 and readParty logged only after launch at 246-247; party box shows only scouting (sortie.js:1021-1025, 1043-1046); will() thresholds temper.js:338-352, and the cited 0.25/0.18 and 0.59/0.42 lines check by arithmetic (bear() at 324-327, mood +/-0.5); broken() field.js:362-380 with the 0.45 resolve term at 375-376; Bonds.describe returns words and a run count (bonds.js:261-269); Outfit.roleOf outfit.js:36-52; Tactics.closing tactics.js:225-233.",
+     "demand": "Ship the parts that read existing state: role mix from Outfit.roleOf, best and worst pair in Bonds.describe words, readParty moved before launch, and the live standing/average-HP block. Replace the numeric break line with a three-band word computed from will() (leaves early / ordinary / stays until nearly wiped) with no hover number. Drop the odds line until systems-field-rating has landed and been calibrated. One owner for sortie.js renderBoard (975-1093), shared with systems-will-axis item 3 and the cohesion line from systems-cohesion-from-pairs.",
+     "antagonist": "design"
+    },
+    {
+     "id": "loop-readout",
+     "verdict": "rework",
+     "attack": "The live 'squad's read of the next fight' prints Field.odds, which with browser inputs is saturated: my Node check against field.js:1106-1115 with the GRADE tables (field.js:80-81) gives 0.95 for four members (power 4, hp = combat maxHp ~220) against six basics, 0.60 against twelve veterans, 0.76 against three elites; the line would be wrong, not approximate, until systems-field-rating lands. The numeric break line lets the player read any one member's temper by swapping them in and out, which game.js:1188-1191 deliberately avoids. Size M for a UI-only change.",
+     "evidenceCheck": "Verified sortie.js:234 passes Temper.will to F.start and 246-247 logs readParty after launch; party box shows scouting only (sortie.js:1021-1025) and cards show stars/race/scouting (1043-1046); temper.js:338-352 will() returns push, broken and voice; field.js:362-380 broken() with the 0.45 x resolve bend at 375-376; Field.odds, Field.frontage, Tactics.closing (tactics.js:477) and Crew.cohesion are exported; Bonds.describe (bonds.js:261-269) and Outfit.roleOf (outfit.js:36, exported :174) exist; game.js:1188-1191 comment confirmed. The crew-line arithmetic (ceil(4 x 0.35) - 1 = 1) matches broken()'s strict less-than.",
+     "demand": "1) Drop the live odds line, or make it an explicit dependency on systems-field-rating and label it as the squad's estimate. 2) Pre-launch block: Temper.readParty word and note, the voice name, pair tiers as words, role mix; show break-off thresholds as a band word unless the user approves numbers. 3) During the run: standing/total and average HP of those standing only. 4) Node test that will() and the rendered line agree for three fixed parties.",
+     "antagonist": "engineering"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,3 @@
+[submodule "ulpc"]
+	path = ulpc
+	url = https://github.com/LiberatedPixelCup/Universal-LPC-Spritesheet-Character-Generator.git

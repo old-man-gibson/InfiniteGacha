@@ -1,0 +1,71 @@
+{
+ "unit": "u-deadcode",
+ "title": "Dead code, phase 1",
+ "overseerSummary": "Phase 1 only. Deleting the 20 uncalled exports waits until waves 2 and 3 are built, since some of those proposals call them. Deleted files go to the backup folder first.",
+ "proposals": [
+  {
+   "id": "cleanup-dead-code-sweep",
+   "title": "Remove the rejected chibi prototype and dead locals now; delete 20 uncalled exports after the build round",
+   "problem": "generator.html and generator.js are the first chibi-proportion prototype that the user rejected; nothing links to them. test/facet.sample.js crashes on load. Three locals and two status properties are never read. Twenty exported functions have no caller anywhere. Deleting the exports now would collide with builders who plan to call some of them, so that part waits.",
+   "evidence": [
+    "generator.html / generator.js (15.6 KB) referenced only by each other and by a comment at index.html:7-8; generator.js:1 says 'chibi proportions'; lpc.html and lpc.js replaced it.",
+    "test/facet.sample.js:8 omits 'relations' from its module list; `node test/facet.sample.js` throws 'Facet.install: core modules not loaded: facet.relations.js' (verified); facet.integration.js:15 and facet.node.js:9 include it and pass.",
+    "Dead locals: game.js:636 ROTATE_MARGIN (one reference, in a comment); martial.js:140 `const now = () => used * 0; // placeholder for readability`; quests.js:27 `const R` (one occurrence in the file).",
+    "Properties declared and never read: elements.js:190 manaburn.detonate (grep finds no reader in any file); elements.js:201 taunted.taunt (combat.js:443 matches the status by id). elements.js:199 kinetic_bulwark.blocksRanged is read only by elements.js:453 statusBlocksRangedType, which has no caller; combat.js has no ranged concept.",
+    "Uncalled exports (whole-word grep over *.js, *.html, test/*.js returns exactly 2 references each: definition and export): bestiary.js briefLine; bonds.js isClose; classes.js byGroup, isBase, trainMult; condition.js stopsWhenSpent; elements.js statusBlocksRangedType, clearStatuses, visibleStatuses; filters.js isFav; mapgen.js ascii; martial.js MASTERY_NAMES; mercy.js mercyChance; missiontypes.js WIN_ATOMS; potential.js gradeOf; proficiency.js setStage; roster.js lockedCount; temper.js leanOf, wordFor; townmap.js plotAt.",
+    "Several of those are exactly what other proposals may call: Bonds.isClose (closest-two record), Temper.wordFor/leanOf (sheet words), Potential.gradeOf, Roster.lockedCount, Condition.stopsWhenSpent.",
+    "Whole-word search cannot see dynamic access such as Module[name]; a search for bracket access on these modules found none."
+   ],
+   "change": "Phase 1, now (no dependency on any other proposal): delete generator.html and generator.js and drop the 'sprite generator is generator.html' clause at index.html:7-8; add 'relations' to the list at test/facet.sample.js:8; delete ROTATE_MARGIN, martial.js `now` and quests.js `R`; remove manaburn.detonate and taunted.taunt; leave kinetic_bulwark.blocksRanged and its reader as they are and flag them as a design call (the planned ranged block).\nPhase 2, after the build round of the other proposals, re-running the scan first: delete every export that still has only its definition and export reference, and its entry in the export object; mapgen.ascii moves to test/ as a console aid instead of being deleted. The scan becomes test/exports.js (Node): reads each game-owned module's export list and fails on an export with no outside reference; expected 0 findings afterwards.\nRe-read each file immediately before editing it: crew.js and sortie.js line numbers moved during this review.",
+   "playerEffect": "No visible change from the deletions. The facet sample script runs again for whoever tunes abilities. The exports test keeps the surface from growing back.",
+   "secondOrder": "A smaller export surface per module makes the dead-export scan a permanent check. Phase 2 deliberately runs after the builders who may call isClose, wordFor and gradeOf, so nothing is deleted and re-added.",
+   "files": [
+    "generator.html",
+    "generator.js",
+    "index.html",
+    "test/facet.sample.js",
+    "game.js",
+    "martial.js",
+    "quests.js",
+    "elements.js",
+    "bestiary.js",
+    "bonds.js",
+    "classes.js",
+    "condition.js",
+    "filters.js",
+    "mapgen.js",
+    "mercy.js",
+    "missiontypes.js",
+    "potential.js",
+    "proficiency.js",
+    "roster.js",
+    "temper.js",
+    "townmap.js",
+    "test/exports.js"
+   ],
+   "size": "S",
+   "risks": "Phase 2 can still delete a symbol an approved proposal's spec names; the rerun scan is the check and a builder's call site counts as a reference. Deleting generator.* removes the only source for the sprite-generation prototype, which the user rejected, and nothing links to it.",
+   "status": "reworked",
+   "response": "Design attack (buys nothing the player sees; collides with loop-readout and loop-record wanting wordFor and isClose): accepted for the exports, which move to phase 2 after the build round. Engineering demand to land the facet.sample.js fix and the generator removal now: accepted as phase 1. Engineering demand to keep mapgen.ascii under test/: accepted. Engineering and design demand that the facet script-tag decision be its own item: moved to cleanup-facet-decision. kinetic_bulwark.blocksRanged is no longer deleted. quests.js:27 R is confirmed unused (single occurrence), which the design attacker could not confirm.",
+   "lens": "cleanup",
+   "verdicts": [
+    {
+     "id": "cleanup-dead-code-sweep",
+     "verdict": "rework",
+     "attack": "Deleting twenty one-line exports buys nothing a player sees and collides with the design builders: loop-readout wants band words (Temper.wordFor), loop-record wants bond tiers (Bonds.isClose is the one-liner), and the concurrent session has already moved line numbers in crew.js and sortie.js. kinetic_bulwark.blocksRanged is a planned behaviour, not dead data. The facet engine (16.9% of shipped JS with no producer) is the only item with weight and the proposal hands it back to the overseer.",
+     "evidenceCheck": "Verified: all 20 named symbols appear only at definition and export (grep over *.js and *.html); ROTATE_MARGIN game.js:636 unused; martial.js:140 placeholder; generator.js:1 'chibi proportions'; index.html:7-8 reference; test/facet.sample.js:8 omits 'relations' while facet.integration.js:15 and facet.node.js:9 include it; game.js:86-88 initialise facets to [] and grep finds no producer; facet.host.ig.js:691 townTierEnd uncalled; combat.js:654 calls tierEnd('encounter') and nothing calls detach. quests.js:27 `const R` not confirmed as unused.",
+     "demand": "Do now: delete generator.html/js and the index.html clause, fix facet.sample.js, delete the three locals and the two stale comments. Defer the export deletions to after the build round and re-run the scan. Decide the facet engine explicitly: either a grant lands in this round with the three hook fixes and a Node test that a 'mission'-tier cell resets after settle, or the 15 script tags come out of game.html and field.html with the files kept.",
+     "antagonist": "design"
+    },
+    {
+     "id": "cleanup-dead-code-sweep",
+     "verdict": "keep",
+     "attack": "Several of the 20 exports are exactly the accessors the loop proposals will call in the same run: Bonds.isClose (loop-record's closest two), Temper.wordFor (loop-arcs sheet words), Potential.gradeOf, Roster.lockedCount, Condition.stopsWhenSpent; deleting then re-adding under concurrent edits is churn. The facet script-tag question is a design decision, not cleanup. Whole-word grep cannot see Module[name] access (none found).",
+     "evidenceCheck": "Grep over all .js and .html excluding .team-backup: each of the 20 symbols has exactly two references, definition and export; ROTATE_MARGIN (game.js:636), martial.js:140 `now`, and quests.js:27 R are unreferenced; manaburn.detonate has no reader; kinetic_bulwark.blocksRanged is read only by statusBlocksRangedType, which has no caller; combat.js:443 matches 'taunted' by id so taunted.taunt is unread; generator.js:1 says 'chibi proportions' and index.html:7-8 names it; test/facet.sample.js throws the exact message cited; c.facets is only initialised at game.js:86 and never granted; FacetHostIG.townTierEnd has no caller; combat.js:654 is the only tierEnd call. Facet.attached growth not re-run.",
+     "demand": "1) Hold deletion of any export named in an approved proposal's spec until that proposal is built, then re-run the scan and delete. 2) The facet script-tag decision goes to the overseer as its own item. 3) Keep mapgen.ascii under test/. 4) Land the facet.sample.js one-word fix and the generator removal now.",
+     "antagonist": "engineering"
+    }
+   ]
+  }
+ ]
+}

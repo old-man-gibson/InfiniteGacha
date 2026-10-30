@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InfiniteGacha map tokens</title>
+<style>
+  body { background:#1b1b22; color:#ddd; font-family:system-ui, sans-serif; margin:0; padding:20px; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px; }
+  p.sub { color:#888; font-size:13px; margin:0 0 16px; max-width:78ch; }
+  .bar { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+  button { padding:7px 13px; background:#3b3bd6; color:#fff; border:0; border-radius:6px; cursor:pointer; font-size:13px; }
+  button.ghost { background:#26262f; color:#aaa; }
+  #field { background:#232a22; border-radius:8px; display:block; max-width:100%; }
+  .crops { display:flex; gap:16px; align-items:flex-end; margin-top:18px; }
+  .crops canvas { image-rendering:pixelated; background:#111; border-radius:4px; }
+  .note { font-size:11px; color:#777; margin-top:6px; }
+  .legend { font-size:12px; color:#999; margin-top:10px; }
+  .legend b { color:#ccc; font-weight:600; }
+  #clock { font-size:12px; color:#888; }
+</style>
+</head>
+<body>
+<h1>Map tokens</h1>
+<p class="sub">Ours are pogs: a head cropped from the LPC frame, a rim that carries state, a name tag.
+Theirs are sprites at their own size, mirrored when they stand to the left of the party so they turn to face it.
+The squad moves on the mission clock — one step every 200 ms of wall time, which is one in-game second at 5:1 —
+and the frame loop interpolates between steps, which is how the real map will run.</p>
+
+<div class="bar">
+  <button id="march">Pause march</button>
+  <button id="reroll" class="ghost">Reroll squad</button>
+  <button id="hurt" class="ghost">Cycle rim state</button>
+  <span id="clock"></span>
+</div>
+
+<canvas id="field" width="960" height="380"></canvas>
+<div class="legend">
+  <b>Rim:</b> blue fine · amber hurt · red down · gold ward.
+  <b>Sprite height</b> is set by bestiary grade, so a legendary reads as large without a label.
+</div>
+
+<div class="crops">
+  <div>
+    <canvas id="raw" width="64" height="64" style="width:128px;height:128px"></canvas>
+    <div class="note">raw LPC frame + crop box</div>
+  </div>
+  <div>
+    <canvas id="head" width="26" height="24" style="width:104px;height:96px"></canvas>
+    <div class="note">head crop</div>
+  </div>
+  <div id="pogsizes" style="display:flex;gap:12px;align-items:flex-end"></div>
+</div>
+
+<script src="stats.js"></script>
+<script src="rng.js"></script>
+<script src="missiontypes.js"></script>
+<script src="lpc.js"></script>
+<script src="tokens.js"></script>
+<script>
+const STEP_MS = MissionTypes.TIME.stepMs;          // 200 ms of wall time = 1 in-game second
+const SQUAD_NAMES = ['Aldric', 'Brenna', 'Kael', 'Sable'];
+const ENEMY_CARD = [
+  { file: 'Basics Stitch Rat.png',   grade: 'basic',     x: 200 },
+  { file: 'Darkness Slime.png',      grade: 'veteran',   x: 420 },
+  { file: 'Corrupted Fire Wolf.png', grade: 'elite',     x: 650 },
+  { file: 'Boss Goblin King.png',    grade: 'legendary', x: 870 },
+];
+
+const field = document.getElementById('field');
+const fx = field.getContext('2d');
+const squad = [];
+let enemies = [];
+let marching = true, dir = 1, stateCycle = 0, gameSeconds = 0, lastStep = performance.now();
+
+const loadPng = (src) => new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+
+async function buildSquad() {
+  squad.length = 0;
+  const container = document.getElementById('pogsizes');
+  container.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    const ch = LPC.generate();
+    const layers = await LPC.buildLayers(ch);
+    const name = SQUAD_NAMES[i % SQUAD_NAMES.length];
+    const x = 90 + (i % 2) * 40, y = 230 + i * 22;
+    squad.push({
+      name, layers, x, y, px: x, py: y, phase: i * 1.4,
+      token: Tokens.pog(layers, { name, ring: Tokens.RINGS.squad }),
+    });
+    if (i === 0) showCrop(layers, name);
+  }
+}
+
+/** The crop check: the raw frame with the box drawn over it, the head alone, and map sizes. */
+function showCrop(layers, name) {
+  const raw = document.getElementById('raw');
+  const rc = raw.getContext('2d');
+  LPC.drawFrame(rc, layers, LPC.ROW_DOWN, 0);
+  rc.strokeStyle = '#ff4d4d'; rc.lineWidth = 1;
+  rc.strokeRect(Tokens.HEAD.x + .5, Tokens.HEAD.y + .5, Tokens.HEAD.w - 1, Tokens.HEAD.h - 1);
+  const hc = document.getElementById('head').getContext('2d');
+  hc.clearRect(0, 0, 26, 24);
+  hc.imageSmoothingEnabled = false;
+  hc.drawImage(Tokens.headCanvas(layers), 0, 0);
+  const container = document.getElementById('pogsizes');
+  for (const size of [28, 40, 56]) {
+    const wrap = document.createElement('div');
+    wrap.appendChild(Tokens.pog(layers, { name, size }));
+    const n = document.createElement('div');
+    n.className = 'note'; n.textContent = size + 'px';
+    wrap.appendChild(n);
+    container.appendChild(wrap);
+  }
+}
+
+async function buildEnemies() {
+  enemies = [];
+  for (const e of ENEMY_CARD) {
+    const img = await loadPng('assets/enemies/' + encodeURIComponent(e.file));
+    if (img) enemies.push({ ...e, img, h: Tokens.enemyHeight(e.grade, 26), y: 300 });
+  }
+}
+
+/** One mission step: everything that moves, moves here, on the in-game clock. */
+function step() {
+  gameSeconds += MissionTypes.TIME.step;
+  if (!marching) return;
+  for (const m of squad) {
+    m.px = m.x; m.py = m.y;
+    m.x += dir * 18;
+    m.y += Math.sin(gameSeconds / 3 + m.phase) * 3;
+  }
+  const xs = squad.map(m => m.x);
+  if (Math.max(...xs) > field.width - 70) dir = -1;
+  if (Math.min(...xs) < 70) dir = 1;
+}
+
+function drawGround() {
+  fx.fillStyle = '#232a22';
+  fx.fillRect(0, 0, field.width, field.height);
+  fx.strokeStyle = 'rgba(255,255,255,.04)';
+  fx.lineWidth = 1;
+  for (let x = 0; x < field.width; x += 24) { fx.beginPath(); fx.moveTo(x + .5, 0); fx.lineTo(x + .5, field.height); fx.stroke(); }
+  for (let y = 0; y < field.height; y += 24) { fx.beginPath(); fx.moveTo(0, y + .5); fx.lineTo(field.width, y + .5); fx.stroke(); }
+}
+
+const lerp = (a, b, t) => a + (b - a) * t;
+
+function draw(now) {
+  const t = Math.min(1, (now - lastStep) / STEP_MS);          // where we are between two steps
+  const at = squad.map(m => ({ m, x: lerp(m.px, m.x, t), y: lerp(m.py, m.y, t) }));
+  drawGround();
+  const c = Tokens.centroid(at);
+
+  for (const e of enemies) {
+    Tokens.drawShadow(fx, e.x, e.y, e.h * 0.42, 0.3);
+    Tokens.drawEnemy(fx, e.img, e.x, e.y, { height: e.h, faceX: c.x });
+  }
+
+  fx.strokeStyle = 'rgba(110,168,255,.3)';
+  fx.setLineDash([4, 4]);
+  fx.beginPath(); fx.moveTo(c.x, 0); fx.lineTo(c.x, field.height); fx.stroke();
+  fx.setLineDash([]);
+  fx.fillStyle = 'rgba(110,168,255,.55)';
+  fx.font = '11px system-ui, sans-serif';
+  fx.textAlign = 'center';
+  fx.fillText('party', c.x, 14);
+
+  for (const a of at) {
+    Tokens.drawShadow(fx, a.x, a.y + 20, 22, 0.18);
+    Tokens.drawPog(fx, a.m.token, a.x, a.y);
+  }
+  document.getElementById('clock').textContent =
+    `in-game ${MissionTypes.realClock(gameSeconds * MissionTypes.TIME.scale)} watched in ${MissionTypes.realClock(gameSeconds)}`;
+  requestAnimationFrame(draw);
+}
+
+document.getElementById('march').onclick = (e) => {
+  marching = !marching;
+  e.target.textContent = marching ? 'Pause march' : 'Resume march';
+};
+document.getElementById('reroll').onclick = () => buildSquad();
+document.getElementById('hurt').onclick = () => {
+  const states = ['squad', 'hurt', 'down', 'ward'];
+  stateCycle = (stateCycle + 1) % states.length;
+  for (const m of squad) m.token = Tokens.pog(m.layers, { name: m.name, ring: Tokens.RINGS[states[stateCycle]] });
+};
+
+(async () => {
+  await LPC.loadCatalog();
+  await buildSquad();
+  await buildEnemies();
+  setInterval(() => { step(); lastStep = performance.now(); }, STEP_MS);
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

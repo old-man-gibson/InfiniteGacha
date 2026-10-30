@@ -1,0 +1,32 @@
+{
+ "unit": "u-harness",
+ "title": "Headless sortie harness",
+ "overseerSummary": "Prerequisite for accepting any balance number. Boots game.html's scripts under a stub DOM and runs real Sortie.launch to settle.",
+ "proposals": [
+  {
+   "id": "systems-headless-sortie-harness",
+   "title": "A committed headless harness that runs the real Sortie to settle",
+   "problem": "No committed test runs combat.js fights through sortie.js. test/field.harness.js invents c.maxHp, c.power and c.speed per character (field.harness.js:38) and resolves fights with the plain attrition model, so its numbers are relative. Every figure in this batch of proposals (wounds, will-axis, rating, meals, debrief) had to be produced from scratch copies of the sortie loop. The two harnesses disagree on the same 15 contract types: the plain one at POW 0.45 gives 63-65% wins and 0.53-0.57 deaths per run, combat-backed sorties with random 3-5 star squads at levels 2-6 give 48% wins and 0.61 deaths per run (1,800 runs).",
+   "evidence": [
+    "test/field.harness.js:38 `c.maxHp = ...; c.power = (3 + stars * 0.7 + (b.str + b.dex) / 20) * POW; c.speed = 0.9 + b.dex / 100`; the memory entry field-balance-harness records that it uses the plain resolver and that its numbers are relative.",
+    "sortie.js:1387 exports launch, board, skip, persist, resume and run; skip() (sortie.js:~393-404) runs ticks until the contract ends, and settle() then pays, kills and grieves exactly as in the browser.",
+    "Scratch boot.js + full2.js: the 61 scripts listed in game.html load in a vm context under a stub DOM with 0 errors; 120 summons through the #pull click path, class assignment by Classes.eligible, then Sortie.board / launch / skip ran three real contracts to settle in under a second each (skip took 344 ms). The same run showed the settle gaps in systems-one-debrief.",
+    "Scratch real2.js reproduces sortie.js fighterFor, resolve and the REGEN tick in 60 lines and agrees with the stub-DOM runs, but it is a copy and will drift from sortie.js.",
+    "game.js:2715-2721 window.Game exposes only state, save, logLine, addItem, renderAll and a few more; the harness reaches summon through the button handler, so no source change is needed."
+   ],
+   "change": "1) test/game.boot.js (new, about 100 lines): reads the script list from game.html, runs the scripts in a vm context with a stub DOM (an element proxy with the methods the UI code calls, a localStorage map, fetch served from disk, setInterval captured), records unknown properties it was asked for, and returns { context, Game, Sortie, registry, errors }. 2) test/sortie.harness.js (new): seeds Rng.withSource and the context's Math.random; builds a roster through the real summon button and assigns classes by Classes.eligible; for each contract type and level runs N contracts through Sortie.board, Sortie.launch with a chosen squad and Sortie.skip (the real settle). Per type it prints win %, deaths per run, survivor end-HP and nadir quantiles, class XP gained, stamina / pool / morale change, injured count, gems paid, fights per run and meals used. Environment: TYPES, RUNS, SQUAD, LEVEL, SEED, and a diff mode that prints two result files side by side so a before/after for any proposal is one command. 3) test/field.harness.js keeps its plain-resolver role; its header states what each harness is for. The memory entry field-balance-harness gets one line pointing at the new one.",
+   "playerEffect": "None directly. It decides whether the other proposals in this batch can be accepted on measured numbers: wound rates and blocked launches at rosters of 8, 15 and 30, XP per hour, pantry use, the morale spiral after consecutive losses, and deaths per run before and after each change.",
+   "secondOrder": "Every proposal's build step ends with this harness's before/after table. It exercises settle(), so the debrief, wounds, meal and cohesion changes are tested through the code paths the browser uses, including persist and resume. Suggested landing order for this lens: harness, systems-one-debrief, then systems-wounds-via-injured and systems-cohesion-from-pairs, then systems-field-rating, systems-meal-buffs, systems-will-axis (which needs partyFacts from the debrief change).",
+   "files": [
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\test\\game.boot.js",
+    "C:\\Users\\mersi\\Documents\\InfiniteGacha\\test\\sortie.harness.js"
+   ],
+   "size": "S",
+   "risks": "The stub DOM is coupled to game.html and to the DOM calls in game.js; a new call needs a stub entry, and the proxy records unknown properties so the failure is visible. Summon and the Field use Rng (cryptographic by design), so repeatable runs need Rng.withSource plus the context's own Math.random. About 0.3 s per contract: 15 types x 40 runs is roughly three minutes. vendor/rot.js prints 'Unable to connect room' on some maps; the harness filters it. The harness measures gearless random-class squads unless told otherwise; geared and caster-heavy squads are options, not defaults.",
+   "status": "kept",
+   "response": "Added from the missed list: item 3, the missing combat-backed harness, which both antagonists' demands depend on. Not added, with evidence: the launch crash (item 2). It reproduces only with Classes.assign(..., { force: true }) in my scratch script; with Classes.eligible gating, 0 of 1,500 generated characters threw in Missions.prepare (430 assigned Cleric, 321 Alchemist), 0 of 3,423 low-arcana characters (only Fighter was eligible for them), and 0 of 20,000 born-class draws; no game code passes force: true. The remaining order problem (c.mission is set before fighters are built) is hardening and is step 6 of systems-cohesion-from-pairs. Item 1 (REGEN erases attrition) is not borne out: 28% of fights after the first begin under 70% party HP and 16% of survivors end under 60% (see systems-wounds-via-injured). Item 4 (contract level follows only Gate clears) is stated as intended on the board itself (sortie.js:984), so it is a design decision for the loop lens, not a defect I can prove. Item 6 (the harness figures were overstated) is conceded in systems-field-rating.",
+   "lens": "systems",
+   "verdicts": []
+  }
+ ]
+}

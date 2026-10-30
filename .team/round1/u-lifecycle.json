@@ -1,0 +1,63 @@
+{
+ "unit": "u-lifecycle",
+ "title": "Sortie lifecycle fixes",
+ "overseerSummary": "Merged two proposals that found the same faults from different directions. Take the launch-throw fix (empty grimoire instead of a throw, all state changes after fighter building) and the persist/Reset/trial-fee fixes as one change to sortie.js.",
+ "proposals": [
+  {
+   "id": "loop-run-integrity",
+   "title": "Keep a run's team bonus across a reload, build fighters before changing state at launch, and stop a live run on Reset",
+   "problem": "Four lifecycle faults around a sortie, found by the antagonists and checked against the code. (1) persist() omits teamId, teamName and bonus, so after any reload the squad's team damage and armor bonus is dropped from the rebuilt fighters, the team tag disappears, and Crew.completed is skipped at settle. (2) launch() pays a trial fee and sets c.mission before building fighters, and fighter construction can throw, which leaves the party flagged as out and a run object with no timer. (3) Reset replaces the game state while a sortie keeps ticking against the old state object. (4) Abandoning a trial before contact keeps the fee spent and the trial open, so relaunching pays twice.",
+   "evidence": [
+    "sortie.js:299-302 persist() writes { id, party, loot, zone, started, state } only; sortie.js:312-336 resume() spreads that into run; sortie.js:258 launch() builds teamId, teamName and bonus into run; sortie.js:60-70 fighterFor reads run.bonus; sortie.js:511 settle() runs Crew.completed only when run.teamId is set; sortie.js:1272-1274 the run panel prints the team tag from run.teamName",
+    "sortie.js:215 Quests.begin pays the trial fee (quests.js:165-175) before F.start; sortie.js:263 sets c.mission; sortie.js:265 builds fighters last, with no try/catch",
+    "Missions.prepare throws 'Cannot read properties of undefined (reading stacked)' for some characters with class-taught words above their arcana level: spellcraft.js:361-366 randomSentence picks from an empty usable list and calls WORDS[undefined]; reproduced by scratchpad\\crash2.js (arcana stage 0 Cleric, 'THROWS'); the guard `if (!usable.length) return [];` makes it pass (scratchpad\\loop2\\crash2_fixed.js: all four stages ok) because checkSentence([]) already returns ok:false (spellcraft.js:281)",
+    "MEASURED reach: through Classes.eligible() + assign() on 6000 random characters the throw occurs for 1 of 1313 eligible Alchemists and 0 of 1830 eligible Clerics (scratchpad\\loop2\\reach.js); with forced assignment (as test harnesses do) it is 22 of 50 Clerics. So the trigger is rare through the training dropdown and certain for forced assignment.",
+    "missions.js:105-125 Missions.launch has the same order: prepare(c, ...) inside the loop before c.mission = run.id, so a throw on a later member leaves earlier members flagged",
+    "game.js:2679-2681 the Reset handler assigns state = newState() and saves; nothing stops or forgets the live sortie, whose run.gs is the old object (sortie.js:439 settle uses run.gs for payouts and G().state for logging and save)",
+    "quests.js:165-175 begin() pays and returns { mission, paid }; sortie.js:338-350 abandon() does not refund; the offer stays (quests.js:158 offer is not deleted until pass/reroll)"
+   ],
+   "change": "1. persist(): add teamId, teamName, bonus and trialPaid to the saved object (sortie.js:299-302). resume() already spreads saved into run. Fighters rebuilt on resume then get run.bonus again.\n2. launch(): reorder so every step that can throw precedes every step that changes state. After F.start and the run object are assembled, build all squad fighters inside a try/catch; on failure set run = null and return `${name} cannot be prepared: ${message}`. Move the trial payment (Quests.begin, sortie.js:215) and the c.mission assignment (sortie.js:263) after that block.\n3. spellcraft.js randomSentence(): `if (!usable.length) return [];` after the usable filter (one line; root cause). buildGrimoire already skips specs that fail checkSentence. A character with no usable word then has an empty grimoire and still fights with a martial plan.\n4. Missions.launch (Gate): same ordering, prepare all members before setting any c.mission.\n5. Sortie.discard(): stop the timer, forget(), run = null, no settle; called from the Reset handler (game.js:2679) before state is replaced. Export it in window.Sortie.\n6. abandon() before contact on a trial run refunds run.trialPaid to the state (Econ items) and logs it; after contact the retreat path applies Quests.fail as today.\n7. Node tests: a persisted-and-resumed run keeps bonus; launch with a throwing fighter leaves c.mission null and the fee unpaid.",
+   "playerEffect": "A reload in the middle of a sortie no longer silently removes the team's damage bonus and run credit. A launch that cannot build a fighter says why and changes nothing. Reset no longer leaves a sortie running against a discarded save. Calling off a trial before contact returns the fee.",
+   "secondOrder": "Team cohesion (Crew.cohesion) and the team's run count become reliable across reloads, which the cohesion proposals from the systems lens read. loop-ledger's persisted encounters ride on the same persist() edit. Empty-grimoire characters stop being a source of hard failures for the training dropdown.",
+   "files": [
+    "sortie.js",
+    "spellcraft.js",
+    "missions.js",
+    "game.js"
+   ],
+   "size": "S",
+   "risks": "Reordering launch() must keep the first-step plan (fighterFor before the first step) and the log lines in order. Refunding a trial fee changes the trial economy slightly: pre-contact abandon becomes free for trials as for contracts, which matches the intent of the free window. The spellcraft guard changes behaviour only where the code threw before. Rare trigger for the launch fault (1 in 1313 Alchemists through the UI path); the persist fault is certain on every reload with a team.",
+   "status": "kept",
+   "response": "New proposal taken from the antagonists' 'missed' lists (the launch crash, persist omitting teamId and bonus, Reset with a live run, abandon after a trial). Both antagonists ranked the crash above every proposal; checked: it reproduces, and the root cause is one missing guard, but through the normal training path it is rare (1 in 1313 eligible Alchemists, none in 1830 Clerics), so the certain fault in the package is the persist omission, which every reload with a team triggers.",
+   "lens": "loop",
+   "verdicts": []
+  },
+  {
+   "id": "cleanup-launch-throw",
+   "title": "Launching a squad can throw and leave it flagged as out; guard the cause and the ordering",
+   "problem": "Missions.prepare throws 'Cannot read properties of undefined (reading stacked)' when a character's class teaches words whose minimum arcana level is above the character's arcana level and the character is not born to arcana. sortie.launch has already set c.mission, assigned run and (for a trial) spent the trial cost by then, so the party reads 'already out', the run screen has no timer, and the only recovery is a reload. Reachable for 1- and 2-star Clerics and Alchemists whose stats or aptitudes were raised to meet the class requirement.",
+   "evidence": [
+    "Stack (reproduced in Node): TypeError at spellcraft.js:109 masteredTier <- :366 tierTok <- :370 randomSentence <- :409 generate <- ai.js:131 decide. spellcraft.js:363 `usable = lexicon.filter(id => WORDS[id].minLevel <= level)` is empty, R.pick(usable) is undefined, WORDS[undefined] is read.",
+    "missions.js:104-128 prepare builds a grimoire whenever Sp.lexiconOf(c).length is non-zero; it does not check that any word is usable at the character's arcana level.",
+    "sortie.js:198-266 launch(): Quests.begin spends the trial cost (quests.js:165-175) at ~line 214; run is assigned at ~line 253; c.mission = id at line 263; fighterFor (which calls M.prepare) at line 265; G().save() and start() after. There is no try/catch, so a throw leaves c.mission set and run non-null with no timer; sortie.js:1069 only handles a string return.",
+    "Reachability, measured (scratchpad cleanup2/crash4.js, crash7.js): characters made eligible for Cleric or Alchemist by the real Classes.eligible check, with no arcana gift: 3, 4 and 5 stars, over 5,000 eligible characters, 0 throw. 1 star with WIS raised to 14 and the prerequisite aptitude at E-: 208 of 809 Clerics and 122 of 316 Alchemists throw; 2 stars: 73 of 1608 and 139 of 865. Stats can be raised by sacrifice (sacrifice.js:165 adds a spent character's base stats to the target) and aptitudes by advancement. The training dropdown calls Classes.assign without force (game.js:1972).",
+    "A force-assigned class (Classes.assign with force) throws for about 1 in 3 one-star Clerics and Alchemists; this is not reachable in play and I did not use it as evidence. A specialisation reached through Classes.specialise throws in 1 of 15,957 sampled characters (mutagenic grown from alchemist)."
+   ],
+   "change": "1) spellcraft.js randomSentence: return [] when usable is empty (checkSentence then rejects it and generate() returns null, which AI.decide already handles at ai.js:131-140). That removes the throw for every class and level.\n2) missions.js prepare: no change needed after (1); add a comment stating that an empty usable lexicon yields an empty grimoire.\n3) sortie.js launch(): wrap the fighterFor loop in try/catch. On a throw: run = null, c.mission = null for the party, refund the trial cost (gs[k] += paid[k] for the keys Quests.begin deducted), and return the string 'Could not prepare <name>: <message>' so the existing problem text at sortie.js:1069-1070 shows it.\n4) New test/prepare.js (Node): for stars 1 to 5, for every base class, raise stats and prerequisite aptitudes until Classes.eligible is true, over 200 characters each, Missions.prepare must not throw; Spellcraft.randomSentence on an empty lexicon returns [].",
+   "playerEffect": "A squad that cannot cast anything at its arcana level launches with a plain martial plan instead of locking its members until a reload. A trial cost is not lost if fighter preparation fails.",
+   "secondOrder": "A low-level Cleric or Alchemist becomes a martial-only fighter until its arcana level reaches the first word it was taught, which is how a class-taught word below the player's level is already treated. The launch guard turns any later preparation error into a message and keeps the board and the roster consistent.",
+   "files": [
+    "spellcraft.js",
+    "sortie.js",
+    "missions.js",
+    "test/prepare.js"
+   ],
+   "size": "S",
+   "risks": "The test raises stats and aptitudes synthetically; it shows the code path throws and that the guard prevents it, not how often a real roster reaches it. Refund logic must use exactly the items Quests.begin deducted (the `paid` object it returns).",
+   "status": "kept",
+   "response": "This is the one proposal added from the 'missed' list: both attackers listed this crash and no builder owned it. I reproduced it, and corrected its reach: the attackers' figures (22 of 50 one-star Clerics, 7 of 400 random characters) came from force-assigned classes; with the real eligibility check there are 0 throws among more than 5,000 eligible 3-5 star characters and a high rate only among 1-2 star characters whose stats were raised. It is still worth fixing because the failure state persists until reload and, on a trial launch, costs the trial fee.",
+   "lens": "cleanup",
+   "verdicts": []
+  }
+ ]
+}

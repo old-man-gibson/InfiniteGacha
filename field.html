@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InfiniteGacha mission field</title>
+<style>
+  * { box-sizing: border-box; }
+  body { background:#1b1b22; color:#ddd; font-family:system-ui, sans-serif; margin:0; padding:16px; }
+  h1 { font-size:17px; margin:0 0 10px; }
+  .bar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; font-size:13px; }
+  button { padding:6px 12px; background:#3b3bd6; color:#fff; border:0; border-radius:6px; cursor:pointer; font-size:13px; }
+  button.ghost { background:#26262f; color:#aaa; }
+  select, input { padding:5px; background:#1b1b22; color:#ddd; border:1px solid #444; border-radius:6px; font-size:13px; }
+  #wrap { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
+  #field { background:#15151b; border-radius:8px; display:block; max-width:100%; height:auto; }
+  aside { width:330px; flex:none; display:flex; flex-direction:column; gap:10px; }
+  @media (max-width: 760px) {
+    body { padding:10px; }
+    aside { width:100%; }
+    #log { height:220px; }
+    select, input { font-size:16px; }
+    button { padding:9px 14px; }
+  }
+  .panel { background:#20202a; border-radius:8px; padding:10px 12px; }
+  .panel h3 { margin:0 0 6px; font-size:13px; color:#fff; }
+  .blurb { font-size:12px; color:#9a9aa8; font-style:italic; margin:0 0 8px; }
+  .obj { font-size:12px; margin:3px 0; color:#bbb; }
+  .obj.met { color:#5fbf7f; }
+  .obj.fail { color:#c96a6a; }
+  .twist { display:inline-block; font-size:11px; background:#3a2f44; color:#d5b8e8; border-radius:4px; padding:1px 6px; margin:2px 3px 0 0; }
+  #log { height:320px; overflow:auto; font-size:12px; line-height:1.45; font-family:ui-monospace, Consolas, monospace; }
+  #log div { white-space:pre-wrap; color:#c8c8d4; }
+  #log .t { color:#666; }
+  #log .hit { color:#8f8f9c; }
+  #clock { font-size:12px; color:#888; margin-left:auto; }
+  .stat { font-size:12px; color:#888; }
+</style>
+</head>
+<body>
+<h1>Mission field</h1>
+<div class="bar">
+  <select id="type"></select>
+  <label class="stat">level <input id="level" type="number" min="1" max="20" value="9" style="width:52px"></label>
+  <button id="go">Roll and run</button>
+  <button id="pause" class="ghost">Pause</button>
+  <select id="speed"><option value="1">1×</option><option value="3">3×</option><option value="8">8×</option></select>
+  <span id="clock"></span>
+</div>
+
+<div id="wrap">
+  <canvas id="field" width="900" height="620"></canvas>
+  <aside>
+    <div class="panel">
+      <h3 id="title">—</h3>
+      <p class="blurb" id="blurb"></p>
+      <div id="twists"></div>
+      <div id="objectives"></div>
+      <div class="stat" id="tally"></div>
+    </div>
+    <div class="panel">
+      <h3>Log</h3>
+      <div id="log"></div>
+    </div>
+  </aside>
+</div>
+
+<script src="rng.js"></script>
+<script src="mercy.js"></script>
+<script src="stats.js"></script>
+<script src="proficiency.js"></script>
+<script src="classes.js"></script>
+<script src="temper.js"></script>
+<script src="bonds.js"></script>
+<!-- facet engine not loaded (shelved). To restore, add script tags in this order: facet/facet.core.js, facet/facet.data.js, facet/facet.registry.js, facet/facet.cells.js, facet/facet.relations.js, facet/facet.pipeline.js, facet/facet.gate.js, facet/facet.mortal.js, facet/facet.forge.js, facet/facet.oracle.js, facet/facet.compile.js, facet.quantities.ig.js, facet.quantities.town.ig.js, facet.schema.ig.js, facet.host.ig.js. -->
+<script src="elements.js"></script>
+<script src="ai.js"></script>
+<script src="spellcraft.js"></script>
+<script src="psionic.js"></script>
+<script src="martial.js"></script>
+<script src="combat.js"></script>
+<script src="missions.js"></script>
+<script src="bestiary.js"></script>
+<script src="vendor/rot.js"></script>
+<script src="missiontypes.js"></script>
+<script src="quests.js"></script>
+<script src="mapgen.js"></script>
+<script src="field.js"></script>
+<script src="tactics.js"></script>
+<script src="lpc.js"></script>
+<script src="tokens.js"></script>
+<script src="fieldview.js"></script>
+<script>
+const cv = document.getElementById('field'), fx = cv.getContext('2d');
+const PARTY_NAMES = ['Aldric', 'Brenna', 'Kael', 'Sable', 'Vyrax', 'Lumen', 'Rook', 'Ysolde'];
+let state = null, view = null, running = false, speedMul = 1, acc = 0, lastReal = 0;
+
+function renderPanels(s) {
+  const m = s.mission;
+  document.getElementById('title').textContent = `${m.icon} ${m.name}`;
+  document.getElementById('blurb').textContent = m.blurb;
+  document.getElementById('twists').innerHTML = m.twists.map(t =>
+    `<span class="twist" title="${MissionTypes.TWISTS[t].desc}">${MissionTypes.TWISTS[t].label}</span>`).join('');
+  document.getElementById('objectives').innerHTML =
+    m.win.map(a => `<div class="obj ${Field.winMet(s, a) ? 'met' : ''}">${Field.winMet(s, a) ? '✔' : '○'} ${MissionTypes.objectiveText(a)}</div>`).join('') +
+    m.lose.map(a => `<div class="obj fail">✖ ${MissionTypes.objectiveText(a)}</div>`).join('');
+  const alive = s.actors.filter(a => a.role === 'squad' && a.alive).length;
+  const foes = s.actors.filter(a => a.side === 'theirs' && a.alive && a.role !== 'structure').length;
+  document.getElementById('tally').textContent =
+    `${alive}/${s.partySize} standing · ${foes} of them left · ${Math.round(100 * s.counters.revealed / s.walkable)}% scouted` +
+    (s.map.floors > 1 ? ` · floor ${s.floorNo}/${s.map.floors}` : '');
+}
+
+function appendLog(lines) {
+  const el = document.getElementById('log');
+  for (const l of lines) {
+    const div = document.createElement('div');
+    const mm = String(Math.floor(l.t / 60)).padStart(2, '0'), ss = String(l.t % 60).padStart(2, '0');
+    div.innerHTML = `<span class="t">${mm}:${ss}</span> ${l.text.startsWith('  ') ? '<span class="hit">' + l.text + '</span>' : l.text}`;
+    el.appendChild(div);
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+async function rollMission() {
+  const [t, variant] = document.getElementById('type').value.split('/');
+  const level = +document.getElementById('level').value || 1;
+  const mission = MissionTypes.roll(t, { level, variant: variant || null });
+  const size = Math.min(mission.party[1], 6);
+  const party = Array.from({ length: size }, (_, i) => ({ name: PARTY_NAMES[i], maxHp: 70, power: 5 }));
+
+  state = Field.start(mission, { party, name: FieldView.namer });
+  view = FieldView.layout(cv, state.map);
+  document.getElementById('log').innerHTML = '';
+  appendLog(state.log);
+  renderPanels(state);
+  FieldView.faces(state);
+  running = true;
+  document.getElementById('pause').textContent = 'Pause';
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!state) return;
+  const dt = Math.min(500, now - lastReal);
+  lastReal = now;
+  if (running && !state.result) {
+    acc += dt * speedMul;
+    let steps = 0;
+    while (acc >= MissionTypes.TIME.stepMs && steps < 40) {
+      acc -= MissionTypes.TIME.stepMs;
+      steps++;
+      const { events } = Field.step(state);
+      if (events.length) appendLog(events);
+      if (state.result) { running = false; break; }
+    }
+    if (steps) renderPanels(state);
+  }
+  view = FieldView.layout(cv, state.map);
+  FieldView.drawMap(fx, state, view);
+  FieldView.drawActors(fx, state, view, dt);
+  document.getElementById('clock').textContent =
+    `in-game ${MissionTypes.realClock(state.clock * MissionTypes.TIME.scale)} of ${MissionTypes.realClock(state.mission.duration * MissionTypes.TIME.scale)}` +
+    ` · watched ${MissionTypes.realClock(state.clock)}` + (state.result ? (state.result.won ? ' · WON' : ' · LOST') : '');
+}
+
+document.getElementById('go').onclick = rollMission;
+document.getElementById('pause').onclick = (e) => {
+  running = !running && !state.result;
+  e.target.textContent = running ? 'Pause' : 'Resume';
+};
+document.getElementById('speed').onchange = (e) => { speedMul = +e.target.value; };
+
+(async () => {
+  const sel = document.getElementById('type');
+  for (const t of Object.keys(MissionTypes.TYPES)) {
+    const vs = MissionTypes.variantsOf(t);
+    for (const v of (vs.length ? vs : [null])) {
+      const o = document.createElement('option');
+      o.value = v ? `${t}/${v}` : t;
+      o.textContent = MissionTypes.TYPES[t].icon + ' ' + MissionTypes.TYPES[t].label + (v ? ' — ' + MissionTypes.TYPES[t].variants[v].label : '');
+      sel.appendChild(o);
+    }
+  }
+  await Bestiary.loadIndex();
+  await LPC.loadCatalog();
+  await rollMission();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

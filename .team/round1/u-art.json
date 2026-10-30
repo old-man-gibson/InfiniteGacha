@@ -1,0 +1,55 @@
+{
+ "unit": "u-art",
+ "title": "One picture per monster",
+ "overseerSummary": "Some rows are chosen by eye. Check the slime and goblin rows when it lands.",
+ "proposals": [
+  {
+   "id": "cleanup-one-enemy-art-table",
+   "title": "One picture per monster: merge the two portrait pickers and the duplicate sprite index",
+   "problem": "Two independent algorithms choose enemy art. The Bestiary tab and fight reports use a curated table; the field uses word-overlap scoring. For 16 of the 25 species they pick different files, so a monster changes appearance between the report and the map. The field scorer gives the Giant Spider Queen Boss Ancestral Giant Wild Boar and the Young Wolf Cockatrice Young. In the curated table five slime rows name keywords with no matching file and fall through to a generic match, so slime_wind, slime_thunder and slime_dark all show Blood Manipulation Slime, slime_earth and slime_king both show Boss Slime Golem, and slime_water shows a boss-class Polluted Water Elemental. The sprite listing is stored twice and fetched twice.",
+   "evidence": [
+    "bestiary.js:17-44 PORTRAITS; bestiary.js:46-48 loadIndex fetches assets/enemies/index.json; bestiary.js:51-60 portrait(id) lower-cases the 2169-entry list on every call.",
+    "fieldview.js:31-56 SPRITE_INDEX, loadSprites('assets/enemies.json'), spriteFor(def) word scoring (+0.5 for a 'boss' prefix on legendary). Callers: fieldview.js:73, 80, 322 (spriteFor); sortie.js:1398 and field.html:199 (loadSprites); game.js:2650 (Bestiary.loadIndex); report.js:54 and 91 (Bestiary.portrait). grep confirms assets/enemies.json is read only by fieldview.js:34.",
+    "assets/enemies.json and assets/enemies/index.json are JSON.stringify-equal, 2169 entries each, and equal as a set to the 2169 .png files on disk (checked in Node).",
+    "Replay of both algorithms over Missions.BESTIARY (scratchpad cleanup2/portraits.js): 9 same, 16 differ. Examples: spider_queen Boss Insect Queen (table) vs Boss Ancestral Giant Wild Boar (field); young_wolf Elemental Wolf Earth vs Cockatrice Young; boar Wild Boar vs DnD Boar Gorilla; slime_wind Blood Manipulation Slime vs Slime Windi; slime_king Boss Slime Golem vs Slime RPG King. Collisions in the table across tiers: {slime_wind, slime_thunder, slime_dark} share one file; {slime_earth, slime_king} share one file.",
+    "Rows whose first entry is not a file name (keyword fall-through): slime_water, slime_wind, slime_thunder, slime_earth, slime_dark. Replacement files that exist in index.json: Slime Wateri.png, Slime Windi.png, Slime Thunderi.png, Slime Earthi.png, Darkness Slime GhastMallow.png, Slime RPG King.png, Slime Holyi.png.",
+    "field.html:68-106 loads missions.js and combat.js but not bestiary.js; bestiary.js has no load-time dependencies (module.exports and window.Bestiary only, bestiary.js:253-254); game.html:561 loads it after fieldview.js, which is fine because spriteFor runs at call time.",
+    "Two index files contain an apostrophe (Shaccad'Yoggoth, Stein's); fieldview.js:60 uses encodeURIComponent for src and bestiary.portrait does not."
+   ],
+   "change": "bestiary.js keeps the single table and the single loader. Rows: slime_water 'Slime Wateri.png', slime_wind 'Slime Windi.png', slime_thunder 'Slime Thunderi.png', slime_earth 'Slime Earthi.png', slime_dark 'Darkness Slime GhastMallow.png', slime_king 'Slime RPG King.png'; keep the curated rows that already name the right species (young_wolf, boar, death_knight, spider_queen, goblin); slime, slime_soldier and goblin are chosen by eye. loadIndex stores the lower-cased list once. New Bestiary.ready() (index loaded). portrait() returns encodeURIComponent'd paths. fieldview.js: delete SPRITE_INDEX, loadSprites and the scoring loop (lines 31-56); spriteFor(def) becomes an Image cache keyed by def.id built from Bestiary.portrait(def.id), and while Bestiary.ready() is false it returns null without caching (the behaviour the current comment at fieldview.js:42-44 requires). sortie.js:1398 and field.html:199 call Bestiary.loadIndex(); field.html gains <script src=\"bestiary.js\"> after missions.js. Delete assets/enemies.json after a grep shows no remaining reader. New test/portraits.js (Node, index.json read directly): every Missions.BESTIARY species has a PORTRAITS row whose first entry is an exact file in the index; the file exists on disk; no two species of different tier share a file; fails with the species id.",
+   "playerEffect": "A monster looks the same in the Bestiary, in the fight report and on the map. Three slime variants stop sharing one picture, and the Giant Spider Queen is no longer drawn as a boar.",
+   "secondOrder": "A species added later needs one table row, and the Node test fails when the row is missing, names a file that is not on disk, or collides across tiers. Without the scorer an unlisted species shows its emoji icon instead of a guessed sprite; with all 25 listed that case does not occur today.",
+   "files": [
+    "bestiary.js",
+    "fieldview.js",
+    "sortie.js",
+    "field.html",
+    "assets/enemies.json",
+    "test/portraits.js"
+   ],
+   "size": "S",
+   "risks": "Which file suits slime, slime_soldier and goblin is a taste call; the test only checks that rows resolve and do not collide. The field page must load bestiary.js before the first spriteFor call, and the index must be awaited before resume (sortie.js:1398 does this today with loadSprites).",
+   "status": "kept",
+   "response": "Design attack (taste calls, emoji fallback) and engineering attack (field.html load order): both accepted as risks and covered by the test and the load-order change. Demands accepted as written: test fails on a missing row, a file not on disk and a cross-tier collision; field.html adds bestiary.js and awaits Bestiary.loadIndex before resume; the lower-case list is computed once; enemies.json is deleted only after the grep. Added the encodeURIComponent difference between the two pickers, which would otherwise break the two apostrophe-named files if either is ever used.",
+   "lens": "cleanup",
+   "verdicts": [
+    {
+     "id": "cleanup-one-enemy-art-table",
+     "verdict": "keep",
+     "attack": "Three species (slime, slime_soldier, goblin) stay a taste call, and deleting the scorer means a species added without a table row shows an emoji instead of a guessed sprite. Small and mechanical.",
+     "evidenceCheck": "Verified: two pickers at bestiary.js:17-61 and fieldview.js:30-59; assets/enemies.json and assets/enemies/index.json are byte-equal (2169 entries, 2169 PNGs on disk); my replay of both algorithms gives 9 same / 16 differ with exactly the cited examples (spider_queen drawn as Boss Ancestral Giant Wild Boar on the field, young_wolf as Cockatrice Young, slime_wind/thunder/dark all Blood Manipulation Slime in the bestiary, slime_earth and slime_king both Boss Slime Golem). field.html loads fieldview.js and not bestiary.js today.",
+     "demand": "The Node test must fail on a missing row, a file not on disk, and two species of different tiers sharing a file. field.html gains bestiary.js before fieldview.js. sortie.js:1398 and field.html:199 switch to Bestiary.loadIndex. Lower-case the index once in loadIndex.",
+     "antagonist": "design"
+    },
+    {
+     "id": "cleanup-one-enemy-art-table",
+     "verdict": "keep",
+     "attack": "Taste calls for slime, slime_soldier and goblin; field.html must load bestiary.js (it already loads missions.js and combat.js, so the order is satisfiable); unlisted species would show the emoji instead of a guessed sprite.",
+     "evidenceCheck": "Reproduced in Node: assets/enemies.json and assets/enemies/index.json are byte-equal (2169 entries, 2169 PNGs on disk); replaying both pickers over Missions.BESTIARY gives 9 same / 16 differ with exactly the cited examples (spider_queen to Boss Ancestral Giant Wild Boar on the field, young_wolf to Cockatrice Young); the five slime rows have no exact file; all seven replacement files exist; portrait() lower-cases the list per call (bestiary.js:52).",
+     "demand": "1) The Node test checks every species resolves to an exact file and no two species of different tiers share one. 2) field.html adds bestiary.js after combat.js and awaits Bestiary.loadIndex before resume. 3) Delete assets/enemies.json only after a grep confirms fieldview.js:34 was its only reader.",
+     "antagonist": "engineering"
+    }
+   ]
+  }
+ ]
+}

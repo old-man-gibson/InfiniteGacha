@@ -1,0 +1,567 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#15151b">
+<title>InfiniteGacha</title>
+<style>
+  * { box-sizing: border-box; }
+  /* The shell is a fixed frame: the sidebar and the resource header hold still and only the
+     panel scrolls. Before this the whole document scrolled, so a roster of eighty pushed the
+     tab list off the top of the screen and you had to scroll back up to change tab. */
+  body { background:#1b1b22; color:#ddd; font-family:system-ui, sans-serif; margin:0; display:flex; height:100vh; height:100dvh; overflow:hidden; }
+  nav { width:170px; flex:none; background:#15151b; padding:16px 10px; display:flex; flex-direction:column; gap:4px; overflow-y:auto; }
+  nav h1 { font-size:16px; margin:0 8px 14px; color:#fff; }
+  .tab { background:none; border:0; color:#aaa; text-align:left; padding:10px 12px; border-radius:6px; cursor:pointer; font-size:14px; }
+  .tab:hover { background:#22222b; color:#ddd; }
+  .tab.active { background:#3b3bd6; color:#fff; }
+  nav .spacer { flex:1; }
+  main { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+  /* header and log sit above the scroll, so the resource bar never leaves the screen */
+  #top { padding:20px 20px 0; flex:none; }
+  #content { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:0 20px 20px; }
+  header { display:flex; align-items:center; gap:16px; margin-bottom:10px; flex-wrap:wrap; }
+  #resources { display:flex; gap:14px; font-size:15px; }
+  .res { background:#26262f; padding:6px 10px; border-radius:6px; }
+  #tick { font-size:12px; color:#777; }
+  h2 { font-size:18px; margin:0 0 12px; }
+  .sub { font-size:11px; color:#888; margin-top:2px; }
+  .empty { color:#777; }
+  button { padding:8px 14px; background:#3b3bd6; color:#fff; border:0; border-radius:6px; cursor:pointer; font-size:13px; }
+  button:disabled { background:#333; color:#777; cursor:default; }
+  button.danger { background:#5a2a2a; }
+  button.ghost { background:#26262f; color:#aaa; }
+  select { padding:5px; background:#1b1b22; color:#ddd; border:1px solid #444; border-radius:6px; font-size:12px; }
+  .grid { display:flex; flex-wrap:wrap; gap:12px; }
+  .card { background:#26262f; border-radius:8px; padding:10px; text-align:center; width:180px; }
+  .card canvas { image-rendering:pixelated; background:#111; border-radius:4px; }
+  .name { font-weight:600; margin-top:6px; }
+  .stars { font-size:13px; letter-spacing:.1em; margin-top:2px; }
+  .stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:2px 6px; font-size:11px; margin-top:6px; color:#ccc; }
+  .stats b { color:#999; font-weight:600; font-size:9px; }
+  /* what the gear adds, shown next to what the character is rather than folded into it */
+  .stats u { color:#6fbf73; text-decoration:none; font-size:9px; margin-left:1px; }
+  .cond { display:flex; flex-direction:column; gap:2px; margin-top:6px; font-size:9px; color:#888; }
+  .cbar { display:flex; align-items:center; gap:5px; }
+  .cbar span { width:22px; text-align:right; letter-spacing:.04em; }
+  .cbar i { flex:1; height:4px; background:#333; border-radius:2px; overflow:hidden; }
+  .cbar b { display:block; height:100%; }
+  @media (max-width: 760px) { .cond { font-size:10px; } .cbar i { height:5px; } }
+  .profs { display:flex; flex-wrap:wrap; gap:3px 6px; justify-content:center; font-size:10px; margin-top:6px; color:#bbb; cursor:pointer; }
+  .profs i { font-style:normal; color:#888; }
+  .prof-s { color:#ffd740; }
+  .workers .profs { display:none; }
+  .controls { display:flex; gap:6px; margin-top:8px; justify-content:center; }
+  .controls button { padding:5px 8px; font-size:11px; }
+  #pull-result { margin-top:18px; }
+  #pull-result .card { width:240px; }
+  .jobbox { background:#20202a; border-radius:8px; padding:12px; margin-bottom:12px; }
+  .jobbox h3 { margin:0 0 4px; font-size:15px; }
+  .request { margin-left:8px; }
+  .workers { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .workers .card { width:130px; padding:6px; }
+  .workers .stats { display:none; }
+  .workers button { margin-top:6px; padding:4px 8px; font-size:10px; }
+  #picker { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:10; }
+  #picker[hidden] { display:none; }
+  #away { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:11; }
+  #away[hidden] { display:none; }
+  #away-body { padding:12px 16px; overflow:auto; font-size:13px; line-height:1.6; display:flex; flex-direction:column; gap:6px; }
+  .away-row { display:flex; flex-wrap:wrap; gap:8px; }
+  .away-log { font-size:11px; color:#8a8a9a; background:#15151b; border-radius:6px; padding:8px 10px; max-height:180px; overflow:auto; }
+  .modal { background:#20202a; border-radius:10px; width:min(680px, 92vw); max-height:85vh; display:flex; flex-direction:column; }
+  .modal header { padding:14px 16px; margin:0; border-bottom:1px solid #333; display:flex; justify-content:space-between; align-items:center; }
+  .modal header h3 { margin:0; font-size:15px; }
+  #picker-list { overflow:auto; padding:8px 12px; }
+  .pick-row { display:flex; align-items:center; gap:12px; padding:8px; border-radius:8px; }
+  .pick-row:hover { background:#26262f; }
+  .pick-row canvas { image-rendering:pixelated; background:#111; border-radius:4px; display:block; }
+  .pick-info { flex:1; min-width:0; }
+  .pick-info .name { margin:0; font-size:13px; }
+  .pick-info .stars { font-size:10px; margin-left:6px; }
+  .pick-out { width:110px; text-align:right; font-size:12px; color:#ccc; }
+  .pick-out .bar { height:5px; background:#333; border-radius:3px; margin-bottom:4px; overflow:hidden; }
+  .pick-out .bar i { display:block; height:100%; background:#3b3bd6; }
+  button.armed { outline:2px solid #e0a040; }
+  .savepane { padding:4px 4px 10px; }
+  .savepane .sub { margin-top:6px; line-height:1.5; }
+  .saverow { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 6px; }
+  .savepaste { width:100%; height:70px; margin-top:10px; background:#15151b; color:#aaa; border:1px solid #444;
+    border-radius:6px; padding:8px; font-family:ui-monospace, monospace; font-size:11px; resize:vertical; }
+  #picker-list input[type=file] { display:block; margin-top:10px; font-size:12px; color:#aaa; }
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(8px); z-index:20;
+    background:#3a2a2a; color:#f0d8d8; border:1px solid #5a3a3a; border-radius:8px; padding:10px 16px;
+    font-size:13px; max-width:min(520px,80vw); opacity:0; pointer-events:none; transition:opacity .18s, transform .18s; }
+  #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  .sac-ask { display:flex; flex-direction:column; gap:6px; align-items:flex-end; }
+  .sac-ask .warn { font-size:10px; max-width:150px; text-align:right; line-height:1.4; }
+  .sac-ask button { padding:5px 8px; font-size:11px; }
+  .pick-row.arming { outline:2px solid #5a2a2a; background:#2e2328; }
+  .pick-row.spent-for-nothing { opacity:.55; }
+  .sac-list { margin-top:8px; }
+  .sac-list .pick-row { background:#26262f; margin-bottom:6px; }
+  .sac-list .pick-row:hover { background:#2c2c38; }
+  #altar .grid .card { cursor:pointer; }
+  #altar .grid .card.sel { outline:2px solid #3b3bd6; }
+  .sac-gain { width:200px; text-align:right; font-size:11px; color:#ccc; line-height:1.5; }
+  .sac-gain b { color:#6fbf73; }
+  .sac-gain .sub { margin-top:0; }
+  .sac-gain i { font-style:normal; color:#888; }
+  #log { font-size:11px; color:#8a8a9a; margin:-8px 0 14px; max-height:52px; overflow:hidden; line-height:1.5; }
+  .warn { color:#e0a040; }
+  .townhead { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; background:#20202a; border-radius:8px; padding:12px 14px; margin-bottom:12px; }
+  .townhead h3 { margin:0 0 4px; font-size:16px; }
+  .bcard { background:#26262f; border-radius:8px; padding:12px; width:220px; }
+  .bcard h3 { margin:0; font-size:14px; }
+  .tiername { font-weight:600; margin-top:4px; }
+  .upgrade { margin-top:10px; }
+  .upgrade button { width:100%; }
+  .items { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .item { background:#26262f; border-radius:6px; padding:8px 10px; width:210px; }
+  .item .name { margin:0; font-size:12px; }
+  .item .count { color:#888; font-weight:400; }
+  .tcard { width:300px; text-align:left; }
+  .tcard canvas { display:block; margin:0 auto; }
+  .tcard .name, .tcard .sub, .tcard .stars { text-align:center; }
+  .aff { font-size:10px; color:#aaa; margin-top:8px; line-height:1.5; }
+  .klass { border-top:1px solid #2a2a2a; padding-top:6px; }
+  .klass select { width:100%; margin-top:5px; }
+  .klass .bar { height:5px; background:#333; border-radius:3px; margin:4px 0; overflow:hidden; }
+  .klass .bar i { display:block; height:100%; background:#c9a227; }
+  .aff b { color:#ccc; }
+  .slots { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
+  .slot select { width:100%; }
+  .slot .sub { text-align:left; margin-top:3px; }
+  .tag { color:#ffd740; }
+  .ok { color:#6fbf73; } .bad { color:#ff6b6b; } .dim { color:#666; }
+  .encounter { background:#20202a; border-radius:8px; padding:10px 12px; margin-top:10px; }
+  .enc-title { font-size:13px; margin-bottom:6px; }
+  .enc-foes { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+  .foe { display:flex; gap:8px; align-items:center; background:#26262f; border-radius:6px; padding:6px 8px; min-width:180px; }
+  .foe img { width:44px; height:44px; object-fit:contain; image-rendering:pixelated; background:#111; border-radius:4px; }
+  .foe.dead { opacity:.55; }
+  .foe-icon { font-size:26px; width:44px; text-align:center; display:inline-block; }
+  .enc-party { border-collapse:collapse; font-size:11px; width:100%; }
+  .enc-party th { color:#888; font-weight:600; text-align:left; padding:2px 6px; border-bottom:1px solid #333; }
+  .enc-party td { padding:3px 6px; }
+  .enc-party tr.down td { color:#a77; }
+  .beast { width:240px; }
+  .beast.unknown { opacity:.5; }
+  .beast-art { height:110px; display:flex; align-items:center; justify-content:center; background:#111; border-radius:6px; margin-bottom:8px; }
+  .beast-art img { max-height:100%; max-width:100%; object-fit:contain; image-rendering:pixelated; }
+  .beast .stats { margin-top:4px; }
+  .placeholder { background:#20202a; border:1px dashed #444; border-radius:8px; padding:30px; color:#777; text-align:center; }
+  .credits { font-size:11px; color:#666; margin-top:30px; }
+  .mcard { cursor:pointer; width:200px; }
+  .mcard.sel { outline:2px solid #3b3bd6; }
+  .mcard.locked { opacity:.5; cursor:default; }
+  .workers .card.sel { outline:2px solid #3b3bd6; }
+  .runrow { background:#26262f; border-radius:8px; padding:10px; margin-top:8px; }
+  .runrow .bar { height:6px; background:#333; border-radius:3px; margin:6px 0; overflow:hidden; }
+  .runrow .bar i { display:block; height:100%; background:#3b3bd6; }
+  .runrow button { margin-top:6px; }
+  .plan { font-size:10px; color:#aaa; text-align:left; margin-top:6px; line-height:1.4; }
+  .plan b { color:#ddd; }
+  .plan i { color:#777; font-style:normal; }
+  .workers .card.pcard { width:230px; }
+  .fightlog { font-size:11px; color:#aab; background:#15151b; border-radius:6px; padding:10px; max-height:360px; overflow:auto; white-space:pre-wrap; margin-top:8px; }
+  h3.fold { cursor:pointer; user-select:none; }
+  h3.fold:hover { color:#fff; }
+  .bcard h3.fold .sub { display:inline; }
+  .caret { color:#777; font-size:12px; }
+  .filters { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:8px 0 4px; }
+  .filters select { font-size:11px; padding:4px 6px; }
+  .filters input[type=search] { font-size:11px; padding:4px 6px; background:#1b1b22; color:#ddd; border:1px solid #444; border-radius:6px; min-width:120px; }
+  .filters button { padding:4px 10px; font-size:11px; }
+  .filters .sub { margin:0 0 0 auto; }
+  @media (max-width: 760px) {
+    .filters select, .filters input[type=search] { font-size:16px; padding:6px; flex:1 1 45%; min-width:0; }
+    .filters .sub { margin-left:0; flex-basis:100%; }
+  }
+  .camrow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px; font-size:12px; }
+  .camrow button { padding:4px 10px; }
+  .camrow label { display:flex; align-items:center; gap:4px; cursor:pointer; }
+  /* the map is drawn at 640x440 and scaled by CSS; the camera reads getBoundingClientRect, so
+     pointer maths survives the scaling */
+  #sortie-map { max-width:100%; height:auto; }
+
+  /* ---------- roster tiles ---------- */
+  /* A roster is for finding somebody. Everything a card used to print — stats, condition,
+     aptitudes, the job select — is one click away on the sheet, so eighty characters are eighty
+     faces you can scan instead of eighty paragraphs you cannot. */
+  #roster { display:grid; grid-template-columns:repeat(auto-fill, minmax(102px, 1fr)); gap:10px; }
+  /* The potential grade. A letter in its own colour with a border, so it reads as a stamp on the
+     character rather than as one more number in the line it sits on. */
+  .pot { display:inline-block; border:1px solid; border-radius:4px; padding:0 3px; font-size:10px;
+         font-weight:700; line-height:14px; cursor:help; letter-spacing:.02em; }
+  .tlevel .pot { margin-left:3px; }
+  /* A class the gate had to hand out. Sits before the name, where a title would. */
+  .rare-mark { color:#ffa726; margin-right:2px; cursor:help; }
+  .rare-mark.legend { color:#ffd740; text-shadow:0 0 4px rgba(255,215,64,.7); }
+  .sac-list .pot, .card .pot { margin-left:4px; }
+  /* The favourite heart. Hollow until it is set, so an unmarked roster is not a wall of red;
+     positioned over the top-left of a tile or card, where the flags are not. */
+  .fav-btn { position:absolute; top:2px; left:2px; z-index:2; background:none; border:0; padding:1px 3px;
+             font-size:13px; line-height:1; color:#5a5a68; cursor:pointer; border-radius:4px; }
+  .fav-btn:hover { color:#ff6b81; background:rgba(255,107,129,.12); }
+  .fav-btn.on { color:#ff6b81; text-shadow:0 0 5px rgba(255,107,129,.55); }
+  .card { position:relative; }
+  .sheet-fav { position:static; font-size:20px; align-self:flex-start; }
+  /* A favourite standing in the sacrifice queue. Marked, never hidden. */
+  .sac-list .fav-row { border-left:3px solid #ff6b81; }
+  .sac-list .fav-row.arming { background:rgba(255,107,129,.10); }
+  /* The potential block on the sheet: the letter, then the six deltas it was read off. */
+  .potline { margin-bottom:8px; }
+  .potline .pot { font-size:12px; padding:1px 5px; }
+  .potspread { display:flex; flex-wrap:wrap; gap:4px 10px; margin:4px 0 2px; font-size:11px; color:#8a8a96; }
+  .potspread span { cursor:help; }
+  .potspread i { font-style:normal; color:#6a6a76; font-size:10px; }
+  .potspread .over { color:#6fbf73; }
+  .potspread .under { color:#c98080; }
+  .potrow { font-size:11px; color:#9a9aa6; margin:3px 0; }
+  .potrow i { font-style:normal; color:#6a6a76; display:inline-block; min-width:64px; }
+  .potrow b { color:#ddd; font-variant-numeric:tabular-nums; }
+  .potspread .sub { margin-left:2px; }
+  .tile { position:relative; background:#26262f; border-radius:8px; border-top:3px solid #444;
+          padding:8px 6px 7px; text-align:center; cursor:pointer; transition:background .12s, transform .12s; }
+  .tile:hover, .tile:focus-visible { background:#2f2f3c; transform:translateY(-2px); outline:none; }
+  .tile:focus-visible { box-shadow:0 0 0 2px #3b3bd6; }
+  .tile canvas { image-rendering:pixelated; background:#111; border-radius:4px; display:block; margin:0 auto; }
+  .tile .tname { font-size:12px; font-weight:600; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tile .tstars { font-size:9px; letter-spacing:.04em; line-height:1.4; }
+  .tile .tlevel { font-size:10px; color:#6a6a76; }
+  .tile .tflags { position:absolute; top:4px; right:4px; display:flex; flex-direction:column; gap:1px; font-size:10px; line-height:1.1; }
+
+  /* ---------- character sheet ---------- */
+  #sheet { position:fixed; inset:0; background:rgba(8,8,12,.74); z-index:12;
+           display:flex; align-items:center; justify-content:center; padding:16px; }
+  #sheet[hidden] { display:none; }
+  .sheet { background:#20202a; border-radius:12px; width:min(940px, 96vw); max-height:92vh;
+           display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.55);
+           border-top:3px solid var(--star); animation:sheet-in .16s ease-out; }
+  @keyframes sheet-in { from { opacity:0; transform:translateY(10px) scale(.985); } }
+  .sheet-hero { position:relative; display:flex; gap:16px; align-items:center;
+                padding:14px 16px; border-bottom:1px solid #2e2e3a; }
+  /* the star colour used once, as a wash behind the portrait, so rarity reads before the text does */
+  .sheet-hero::before { content:''; position:absolute; inset:0; pointer-events:none; opacity:.16;
+    background:radial-gradient(300px 150px at 80px 50%, var(--star), transparent 70%); }
+  .sheet-portrait { position:relative; flex:none; }
+  .sheet-portrait canvas { image-rendering:pixelated; background:#15151b; border:1px solid #33333f;
+                           border-radius:8px; display:block; }
+  .sheet-id { position:relative; flex:1; min-width:0; }
+  .sheet-id h3 { margin:0; font-size:21px; }
+  .sheet-id .stars { margin-top:1px; }
+  .sheet-id .sub { display:inline; margin-left:4px; }
+  .sheet-tags { display:flex; flex-wrap:wrap; gap:4px 10px; font-size:11.5px; color:#bbb; margin-top:6px; }
+  .sheet-flags { font-size:11px; color:#aaa; margin-top:5px; }
+  .sheet-close { position:relative; flex:none; align-self:flex-start; }
+  .dim { color:#6a6a76; }
+
+  .sheet-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+                padding:14px 16px 18px; display:grid; grid-template-columns:300px 1fr; gap:18px; align-items:start; }
+
+  /* the radar */
+  .radar { width:100%; max-width:300px; display:block; margin:0 auto; overflow:visible; }
+  .radar .ring { fill:none; stroke:#33333f; stroke-width:1; }
+  .radar .spoke { stroke:#2c2c38; stroke-width:1; }
+  .radar .avg { fill:none; stroke:#787890; stroke-width:1.5; stroke-dasharray:4 3; }
+  .radar .shape { fill-opacity:.22; stroke-width:2; stroke-linejoin:round;
+                  transform-origin:center; animation:radar-in .32s cubic-bezier(.2,.8,.3,1); }
+  @keyframes radar-in { from { transform:scale(.08); opacity:0; } }
+  .radar .dot { stroke:#20202a; stroke-width:1.5; }
+  .radar .lbl { cursor:pointer; }
+  .radar .lbl text { font-size:10.5px; fill:#9a9aa6; font-family:system-ui, sans-serif; }
+  .radar .lbl .val { font-size:9px; fill:#6a6a76; }
+  .radar .lbl:hover text { fill:#ddd; }
+  .radar .lbl.on text { fill:#fff; font-weight:600; }
+  .radar .lbl.on .val { fill:#bbb; }
+  .radar-legend { display:flex; flex-wrap:wrap; gap:12px; justify-content:center; font-size:10.5px; color:#999; margin-top:2px; }
+  .radar-legend i { display:inline-block; width:14px; height:0; vertical-align:middle; margin-right:4px; }
+  .radar-legend .sw-solid { border-top:2px solid #ddd; }
+  .radar-legend .sw-dash { border-top:2px dashed #787890; }
+  .radar-note { font-size:11.5px; color:#ccc; line-height:1.5; margin-top:8px; }
+  .radar-note .warn { font-size:11px; }
+  .radar-note .sub { line-height:1.45; }
+
+  /* the breakdown of whichever spoke is being read */
+  .axis-detail { background:#1b1b22; border-radius:8px; padding:10px 12px; margin-top:10px; }
+  .axis-detail h4 { margin:0; font-size:13px; }
+  .axis-detail .blurb { font-size:10.5px; color:#888; line-height:1.5; margin:3px 0 9px; }
+  .apart { margin-bottom:7px; font-size:10.5px; }
+  .apart .ptop { display:flex; justify-content:space-between; gap:8px; }
+  .apart .ptop b { color:#ddd; font-weight:600; }
+  .apart .ptop i { font-style:normal; color:#777; }
+  .apart .pbar { height:4px; background:#2c2c38; border-radius:2px; margin-top:3px; overflow:hidden; }
+  .apart .pbar span { display:block; height:100%; border-radius:2px; transition:width .2s; }
+  .apart .ptext { color:#83838f; margin-top:2px; line-height:1.4; }
+
+  /* the right column */
+  .sec { margin-bottom:15px; }
+  .sec > h4 { margin:0 0 6px; font-size:10.5px; color:#8a8a9a; text-transform:uppercase; letter-spacing:.08em; }
+  /* left to itself a condition bar fills the column, and a 600px-wide stamina bar reads as a
+     progress meter for the whole sheet rather than one number about one person */
+  .sheet .cond.big { font-size:10.5px; gap:4px; max-width:340px; }
+  .sheet .cond.big .cbar i { height:6px; }
+  .sheet .cond.big .cbar span { width:26px; }
+  .sheet .stats { grid-template-columns:repeat(6, 1fr); font-size:12px; }
+  .derived { display:grid; grid-template-columns:repeat(auto-fill, minmax(112px, 1fr)); gap:2px 10px;
+             font-size:10.5px; color:#bbb; margin-top:8px; }
+  .derived i { font-style:normal; color:#83838f; }
+  .derived b { font-weight:400; }
+  /* a derived stat the gear is holding up, so the sheet says which numbers are borrowed */
+  .derived b.lifted { color:#6fbf73; font-weight:600; }
+  .aptgroup { margin-bottom:7px; }
+  .aptgroup .gname { font-size:9.5px; color:#6a6a76; text-transform:uppercase; letter-spacing:.06em; margin-bottom:3px; }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; }
+  .chip { background:#2a2a35; border-radius:4px; padding:2px 6px; font-size:10.5px; color:#bbb; }
+  .chip i { font-style:normal; color:#83838f; }
+  .chip.s { box-shadow:0 0 0 1px #5a4a12 inset; }
+  .sheet .sec .controls { justify-content:flex-start; }
+  .gear { font-size:11px; color:#bbb; line-height:1.55; }
+  .gear i { font-style:normal; color:#83838f; display:inline-block; min-width:78px; }
+
+  /* ---------- narrow screens ---------- */
+  /* One column of everything, the sidebar laid on its side as a scrolling strip, and every
+     control grown to something a thumb can hit. Nothing here changes the desktop layout. */
+  @media (max-width: 760px) {
+    body { flex-direction:column; }
+    nav { width:auto; flex:none; flex-direction:row; align-items:center; gap:6px; padding:8px 10px;
+          overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; z-index:9;
+          border-bottom:1px solid #26262f; scrollbar-width:none; }
+    nav::-webkit-scrollbar { display:none; }
+    nav h1 { font-size:14px; margin:0 8px 0 2px; white-space:nowrap; }
+    nav .spacer { display:none; }
+    .tab { flex:none; white-space:nowrap; padding:9px 12px; font-size:13px; }
+    #reset { flex:none; white-space:nowrap; padding:8px 12px; }
+    #top { padding:10px 12px 0; }
+    #content { padding:0 12px 12px; }
+    header { gap:10px; margin-bottom:12px; }
+    #resources { flex-wrap:wrap; gap:8px; font-size:13px; }
+    .res { padding:5px 9px; }
+    h2 { font-size:17px; }
+    #log { max-height:46px; margin:-4px 0 12px; }
+
+    /* two cards to a row, and the wide ones take the lot */
+    .card, .bcard, .mcard { width:calc(50% - 6px); }
+    .workers .card { width:calc(50% - 4px); }
+    .items .item { width:calc(50% - 4px); }
+    .tcard, .workers .card.pcard, #pull-result .card, .placeholder { width:100%; }
+    .card canvas { max-width:100%; height:auto; }
+    .stats { grid-template-columns:repeat(2, 1fr); font-size:12px; }
+    .tcard .stats { grid-template-columns:repeat(3, 1fr); }
+    .stats b { font-size:10px; }
+
+    /* a finger is not a mouse pointer */
+    button { padding:10px 14px; font-size:14px; }
+    .controls button, .workers button, .runrow button, .camrow button { padding:8px 10px; font-size:12px; }
+    /* 16px is the line under which iOS Safari zooms the page when a field takes focus */
+    select, input { font-size:16px; padding:7px; }
+    .tab, button, select, .mcard, #altar .grid .card { touch-action:manipulation; }
+
+    /* 9 and 10px type is for a screen at desk distance */
+    .sub, .aff, .plan, .profs, .item .name, .fightlog { font-size:11.5px; }
+
+    /* landscape on a notched phone puts the cutout over the left edge of the page */
+    #content, #top { padding-left:max(12px, env(safe-area-inset-left)); padding-right:max(12px, env(safe-area-inset-right)); }
+    nav { padding-left:max(10px, env(safe-area-inset-left)); padding-right:max(10px, env(safe-area-inset-right)); }
+    .townhead { flex-direction:column; gap:8px; }
+    .modal { width:96vw; max-height:88vh; }
+
+    /* the sheet becomes one column: radar first, because that is the thing worth looking at */
+    #sheet { padding:8px; }
+    .sheet { width:100%; max-height:94vh; }
+    .sheet-body { grid-template-columns:1fr; gap:14px; padding:12px 12px 16px; }
+    .sheet-hero { padding:12px; gap:12px; }
+    .sheet-id h3 { font-size:18px; }
+    .sheet-portrait canvas { width:96px !important; height:96px !important; }
+    .sheet .stats { grid-template-columns:repeat(3, 1fr); }
+    .radar { max-width:min(300px, 88vw); }
+    .gear i { min-width:0; margin-right:5px; }
+    /* a fingertip is not a mouse pointer: tiles need to be hit, not aimed at */
+    #roster { grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:8px; }
+    .tile { touch-action:manipulation; }
+
+    .pick-row { flex-wrap:wrap; gap:10px; }
+    .pick-out, .sac-gain { width:100%; text-align:left; }
+    .fightlog { max-height:260px; }
+    .credits { margin-top:20px; }
+  }
+
+  /* on a phone the strip is worth more room than the wordmark */
+  @media (max-width: 520px) {
+    nav h1 { display:none; }
+  }
+
+  /* phones held upright: one card to a row, because half of 360px is not a card */
+  @media (max-width: 430px) {
+    .card, .bcard, .mcard, .items .item { width:100%; }
+    .workers .card { width:calc(50% - 4px); }
+    .stats { grid-template-columns:repeat(3, 1fr); }
+  }
+  /* the town, as a place */
+  #townmap-box { margin: 0 0 18px; }
+  #townmap-host { width:100%; height:min(58vh, 520px); min-height:260px; background:#14141a; border:1px solid #2c2c38; border-radius:10px; overflow:hidden; }
+  canvas.townmap { display:block; width:100%; height:100%; touch-action:none; }
+  .townmap-legend { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:6px 2px 0; }
+  .townmap-hint { opacity:.55; }
+  .relrow { display:flex; align-items:center; gap:8px; padding:3px 0; }
+  .relrow .who { flex:1; }
+  .relrow .tag { font-size:11px; }
+</style>
+</head>
+<body>
+<nav>
+  <h1>InfiniteGacha</h1>
+  <button class="tab" data-tab="summon">✨ Summon</button>
+  <button class="tab" data-tab="roster">👥 Roster</button>
+  <button class="tab" data-tab="town">🏙️ Town</button>
+  <button class="tab" data-tab="jobs">🏭 Jobs</button>
+  <button class="tab" data-tab="inventory">🎒 Inventory</button>
+  <button class="tab" data-tab="training">🎯 Training grounds</button>
+  <button class="tab" data-tab="altar">⚱️ Altar</button>
+  <button class="tab" data-tab="gate">🌀 Gate</button>
+  <button class="tab" data-tab="bestiary">📖 Bestiary</button>
+  <button class="tab" data-tab="field">🗺️ Field</button>
+  <div class="spacer"></div>
+  <button id="export" class="ghost" title="Write this save to a file you can keep">⬇️ Export save</button>
+  <button id="import" class="ghost" title="Load a save from a file">⬆️ Import save</button>
+  <button id="reset" class="ghost" title="Start a new town. The wiped save is kept as the previous save and can be restored from the Export or Import panel">Reset save</button>
+</nav>
+<main>
+  <div id="top">
+    <header>
+      <div id="resources"></div>
+      <div id="tick"></div>
+    </header>
+    <div id="log"></div>
+  </div>
+  <div id="content">
+
+  <section class="panel" id="panel-summon">
+    <h2>Summon</h2>
+    <p class="sub">One character per pull. 1 to 5 stars, weighted toward the low end.</p>
+    <button id="pull">Summon</button>
+    <div id="pull-result"></div>
+  </section>
+
+  <section class="panel" id="panel-roster" hidden>
+    <h2>Roster</h2>
+    <div id="roster-panel"></div>
+  </section>
+
+  <section class="panel" id="panel-town" hidden>
+    <h2>Town</h2>
+    <div id="townmap-box">
+      <div id="townmap-host"></div>
+      <div class="townmap-legend"><span id="townmap-census" class="sub"></span><span class="sub townmap-hint">scroll to zoom · drag to pan · click somebody to open their sheet</span></div>
+    </div>
+    <div id="town"></div>
+  </section>
+
+  <section class="panel" id="panel-jobs" hidden>
+    <h2>Jobs</h2>
+    <p class="sub">Work per tick = (two job stats) / 8 × aptitude × building × rest. Gathering adds resources; crafting fills a progress bar and turns materials into items when it completes.</p>
+    <div id="jobs"></div>
+  </section>
+
+  <section class="panel" id="panel-inventory" hidden>
+    <h2>Inventory</h2>
+    <div id="inventory"></div>
+  </section>
+
+  <section class="panel" id="panel-training" hidden>
+    <h2>Training grounds &amp; armory</h2>
+    <div id="training"></div>
+  </section>
+
+  <section class="panel" id="panel-altar" hidden>
+    <h2>Altar</h2>
+    <div id="altar"></div>
+  </section>
+
+  <section class="panel" id="panel-field" hidden>
+    <h2>Field</h2>
+    <div id="sortie"></div>
+  </section>
+
+  <section class="panel" id="panel-gate" hidden>
+    <h2>Gate</h2>
+    <div id="gate"></div>
+  </section>
+
+  <section class="panel" id="panel-bestiary" hidden>
+    <h2>Bestiary</h2>
+    <div id="bestiary"></div>
+  </section>
+
+  <div id="away" hidden>
+    <div class="modal">
+      <header><h3>⏳ While you were away</h3><button id="away-close" class="ghost">Close</button></header>
+      <div id="away-body"></div>
+    </div>
+  </div>
+
+  <div id="picker" hidden>
+    <div class="modal">
+      <header><h3 id="picker-title"></h3><button id="picker-close" class="ghost">Close</button></header>
+      <div id="picker-list"></div>
+    </div>
+  </div>
+
+  <!-- the character sheet, built by openSheet() in game.js -->
+  <div id="sheet" hidden></div>
+
+  <p class="credits">Art from the Universal LPC Spritesheet Character Generator (CC-BY-SA 3.0 / GPL 3.0 / OGA-BY 3.0). Attribution in ulpc/CREDITS.csv.</p>
+  </div>
+</main>
+<script src="rng.js"></script>
+<script src="mercy.js"></script>
+<script src="roster.js"></script>
+<script src="names.js"></script>
+<script src="stats.js"></script>
+<script src="proficiency.js"></script>
+<script src="economy.js"></script>
+<script src="gear.js"></script>
+<script src="affinity.js"></script>
+<script src="classes.js"></script>
+<script src="condition.js"></script>
+<script src="temper.js"></script>
+<script src="bonds.js"></script>
+<script src="lodging.js"></script>
+<script src="crew.js"></script>
+<script src="outfit.js"></script>
+<script src="sacrifice.js"></script>
+<script src="lpc.js"></script>
+<script src="ai.js"></script>
+<script src="gifts.js"></script>
+<!-- facet engine not loaded (shelved). To restore, add script tags in this order: facet/facet.core.js, facet/facet.data.js, facet/facet.registry.js, facet/facet.cells.js, facet/facet.relations.js, facet/facet.pipeline.js, facet/facet.gate.js, facet/facet.mortal.js, facet/facet.forge.js, facet/facet.oracle.js, facet/facet.compile.js, facet.quantities.ig.js, facet.quantities.town.ig.js, facet.schema.ig.js, facet.host.ig.js. -->
+<script src="elements.js"></script>
+<script src="spellcraft.js"></script>
+<script src="psionic.js"></script>
+<script src="martial.js"></script>
+<script src="prowess.js"></script>
+<script src="consume.js"></script>
+<script src="combat.js"></script>
+<script src="bestiary.js"></script>
+<script src="report.js"></script>
+<script src="missions.js"></script>
+<script src="offline.js"></script>
+<script src="potential.js"></script>
+<script src="filters.js"></script>
+<script src="savestore.js"></script>
+<script src="game.js"></script>
+<script src="vendor/rot.js"></script>
+<script src="missiontypes.js"></script>
+<script src="quests.js"></script>
+<script src="mapgen.js"></script>
+<script src="townmap.js"></script>
+<script src="townlife.js"></script>
+<script src="field.js"></script>
+<script src="tactics.js"></script>
+<script src="tokens.js"></script>
+<script src="fieldview.js"></script>
+<script src="townview.js"></script>
+<script src="sortie.js"></script>
+</body>
+</html>
